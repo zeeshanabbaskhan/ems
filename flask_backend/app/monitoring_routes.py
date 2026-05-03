@@ -486,16 +486,25 @@ def elder_login(body: ElderLoginBody):
         row = c.fetchone()
         if not row or not verify_password(body.password, row["password_hash"]):
             raise HTTPException(status_code=401, detail="Invalid credentials")
-        c.execute("SELECT id FROM patients WHERE elder_user_id = ?", (row["id"],))
+        elder_uid = str(row["id"])
+        c.execute("SELECT id FROM patients WHERE elder_user_id = ?", (elder_uid,))
         prow = c.fetchone()
-        pid = prow["id"] if prow else ""
+        if not prow:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "This elder account is not linked to a patient record. "
+                    "Ask your caregiver to complete enrollment or contact support."
+                ),
+            )
+        patient_id = str(prow["id"])
         token = create_token(user_id=row["id"], role="elder", email=row["email"] or un)
         return {
             "access_token": token,
             "token_type": "bearer",
             "role": "elder",
             "user_id": row["id"],
-            "patient_id": pid,
+            "patient_id": patient_id,
             "display_name": row["full_name"] or un,
         }
 
