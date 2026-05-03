@@ -3,14 +3,19 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'http_client_factory.dart';
 import 'models.dart';
 
-
 class BackendApiClient {
-  BackendApiClient({required String baseUrl}) : _baseUrl = _normalizeBaseUrl(baseUrl);
+  BackendApiClient({required String baseUrl})
+      : _baseUrl = _normalizeBaseUrl(baseUrl),
+        _httpClient = createBackendHttpClient();
 
-  static const Duration _requestTimeout = Duration(seconds: 8);
+  /// Mobile/cellular paths can exceed a few seconds; keep below typical OS limits.
+  static const Duration _requestTimeout = Duration(seconds: 25);
+  static const int _sendAttempts = 2;
 
+  final http.Client _httpClient;
   String _baseUrl;
   String? _bearerToken;
 
@@ -45,22 +50,37 @@ class BackendApiClient {
     _baseUrl = _normalizeBaseUrl(baseUrl);
   }
 
+  void close() {
+    _httpClient.close();
+  }
+
   Uri _uri(String path) => Uri.parse('$_baseUrl$path');
 
-  Future<Object> _send(Future<http.Response> requestFuture) async {
-    try {
-      final response = await requestFuture.timeout(_requestTimeout);
-      return await _decodeResponse(response);
-    } on TimeoutException {
-      throw ApiException(
-        'The backend request timed out. Check the server status and the base URL.',
-      );
-    } catch (error) {
-      if (error is ApiException) {
-        rethrow;
+  Future<Object> _send(Future<http.Response> Function() sendRequest) async {
+    for (var attempt = 0; attempt < _sendAttempts; attempt++) {
+      try {
+        final response = await sendRequest().timeout(_requestTimeout);
+        return await _decodeResponse(response);
+      } on TimeoutException {
+        if (attempt >= _sendAttempts - 1) {
+          throw ApiException(
+            'The backend request timed out (${_requestTimeout.inSeconds}s, '
+            '$_sendAttempts attempts). Base URL: $_baseUrl. Try Wi‑Fi instead of mobile data, '
+            'or open $_baseUrl/api/v1/health in the phone browser.',
+          );
+        }
+      } on http.ClientException catch (e) {
+        if (attempt >= _sendAttempts - 1) {
+          throw ApiException('Could not reach $_baseUrl: $e');
+        }
+      } catch (error) {
+        if (error is ApiException) {
+          rethrow;
+        }
+        throw ApiException('Could not reach the backend: $error');
       }
-      throw ApiException('Could not reach the backend: $error');
     }
+    throw ApiException('Could not reach the backend (unexpected).');
   }
 
   Future<Object> _decodeResponse(http.Response response) async {
@@ -97,12 +117,12 @@ class BackendApiClient {
   /// Returns manifest-backed dimensions when the inference stack is loaded (503 if not).
   Future<Map<String, dynamic>> getInferenceStatus() async {
     return _asMap(
-      await _send(http.get(_uri('/api/v1/inference/status'), headers: _headers())),
+      await _send(() => _httpClient.get(_uri('/api/v1/inference/status'), headers: _headers())),
     );
   }
 
   Future<void> ping() async {
-    await _send(http.get(_uri('/api/v1/health'), headers: _headers()));
+    await _send(() => _httpClient.get(_uri('/api/v1/health'), headers: _headers()));
   }
 
   Future<PatientRecord> createPatient({
@@ -111,7 +131,7 @@ class BackendApiClient {
   }) async {
     return PatientRecord.fromJson(
       _asMap(      await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/patients'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -125,7 +145,7 @@ class BackendApiClient {
 
   Future<PatientRecord> getPatient(String patientId) async {
     return PatientRecord.fromJson(
-      _asMap(await _send(http.get(_uri('/api/v1/patients/$patientId'), headers: _headers()))),
+      _asMap(await _send(() => _httpClient.get(_uri('/api/v1/patients/$patientId'), headers: _headers()))),
     );
   }
 
@@ -137,7 +157,7 @@ class BackendApiClient {
   }) async {
     return DeviceRecord.fromJson(
       _asMap(await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/devices'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -153,7 +173,7 @@ class BackendApiClient {
 
   Future<DeviceRecord> getDevice(String deviceId) async {
     return DeviceRecord.fromJson(
-      _asMap(await _send(http.get(_uri('/api/v1/devices/$deviceId'), headers: _headers()))),
+      _asMap(await _send(() => _httpClient.get(_uri('/api/v1/devices/$deviceId'), headers: _headers()))),
     );
   }
 
@@ -165,7 +185,7 @@ class BackendApiClient {
   }) async {
     return SessionRecord.fromJson(
       _asMap(      await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/sessions'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -181,7 +201,7 @@ class BackendApiClient {
 
   Future<void> stopSession(String sessionId) async {
     await _send(
-      http.post(
+      () => _httpClient.post(
         _uri('/api/v1/sessions/$sessionId/stop'),
         headers: _headers(jsonBody: true),
         body: jsonEncode({
@@ -202,7 +222,7 @@ class BackendApiClient {
   }) async {
     return IngestResponseModel.fromJson(
       _asMap(      await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/ingest/live'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -230,7 +250,7 @@ class BackendApiClient {
   }) async {
     return AlertRecordModel.fromJson(
       _asMap(      await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/alerts/manual'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -255,7 +275,7 @@ class BackendApiClient {
     required String bearerToken,
   }) async {
     await _send(
-      http.post(
+      () => _httpClient.post(
         _uri('/api/v1/patients/me/location'),
         headers: {
           'Content-Type': 'application/json',
@@ -273,12 +293,12 @@ class BackendApiClient {
 
   Future<SystemSummaryModel> getSummary() async {
     return SystemSummaryModel.fromJson(
-      _asMap(await _send(http.get(_uri('/api/v1/summary'), headers: _headers()))),
+      _asMap(await _send(() => _httpClient.get(_uri('/api/v1/summary'), headers: _headers()))),
     );
   }
 
   Future<List<LiveStatusModel>> getLivePatients() async {
-    final rows = _asList(await _send(http.get(_uri('/api/v1/monitor/patients/live'), headers: _headers())));
+    final rows = _asList(await _send(() => _httpClient.get(_uri('/api/v1/monitor/patients/live'), headers: _headers())));
     return rows
         .whereType<Map<String, dynamic>>()
         .map(LiveStatusModel.fromJson)
@@ -288,7 +308,7 @@ class BackendApiClient {
   /// Caretaker’s enrolled patients (one per account on current backend).
   Future<List<CaregiverAssignedPatientModel>> getCaregiverMyPatients() async {
     final m = _asMap(
-      await _send(http.get(_uri('/api/v1/caregiver/my-patients'), headers: _headers())),
+      await _send(() => _httpClient.get(_uri('/api/v1/caregiver/my-patients'), headers: _headers())),
     );
     final list = m['patients'] as List<dynamic>? ?? const <dynamic>[];
     return list
@@ -299,7 +319,7 @@ class BackendApiClient {
 
   Future<void> deleteCaregiverPatient(String patientId) async {
     await _send(
-      http.delete(_uri('/api/v1/caregiver/my-patients/$patientId'), headers: _headers()),
+      () => _httpClient.delete(_uri('/api/v1/caregiver/my-patients/$patientId'), headers: _headers()),
     );
   }
 
@@ -316,7 +336,7 @@ class BackendApiClient {
     }
 
     final uri = _uri('/api/v1/alerts').replace(queryParameters: query.isEmpty ? null : query);
-    final rows = _asList(await _send(http.get(uri, headers: _headers())));
+    final rows = _asList(await _send(() => _httpClient.get(uri, headers: _headers())));
     return rows
         .whereType<Map<String, dynamic>>()
         .map(AlertRecordModel.fromJson)
@@ -330,7 +350,7 @@ class BackendApiClient {
   }) async {
     return AlertRecordModel.fromJson(
       _asMap(      await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/alerts/$alertId/acknowledge'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -349,7 +369,7 @@ class BackendApiClient {
   }) async {
     return AlertRecordModel.fromJson(
       _asMap(      await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/alerts/$alertId/resolve'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -385,7 +405,7 @@ class BackendApiClient {
     }
 
     await _send(
-      http.put(
+      () => _httpClient.put(
         _uri('/api/v1/detector/config'),
         headers: _headers(jsonBody: true),
         body: jsonEncode(payload),
@@ -400,7 +420,7 @@ class BackendApiClient {
   }) async {
     return CaregiverAuthModel.fromJson(
       _asMap(      await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/auth/caregiver/signup'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -419,7 +439,7 @@ class BackendApiClient {
   }) async {
     return CaregiverAuthModel.fromJson(
       _asMap(      await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/auth/caregiver/login'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -437,7 +457,7 @@ class BackendApiClient {
   }) async {
     return _asMap(
       await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/auth/admin/login'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({'email': email, 'password': password}),
@@ -448,13 +468,13 @@ class BackendApiClient {
 
   Future<Map<String, dynamic>> getAdminDashboard() async {
     return _asMap(
-      await _send(http.get(_uri('/api/v1/admin/dashboard'), headers: _headers())),
+      await _send(() => _httpClient.get(_uri('/api/v1/admin/dashboard'), headers: _headers())),
     );
   }
 
   Future<List<Map<String, dynamic>>> adminListCaregivers() async {
     final rows = _asList(
-      await _send(http.get(_uri('/api/v1/admin/caregivers'), headers: _headers())),
+      await _send(() => _httpClient.get(_uri('/api/v1/admin/caregivers'), headers: _headers())),
     );
     return rows.whereType<Map<String, dynamic>>().toList();
   }
@@ -466,7 +486,7 @@ class BackendApiClient {
   }) async {
     return _asMap(
       await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/admin/caregivers'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -481,13 +501,13 @@ class BackendApiClient {
 
   Future<void> adminDeleteCaregiver(String userId) async {
     await _send(
-      http.delete(_uri('/api/v1/admin/caregivers/$userId'), headers: _headers()),
+      () => _httpClient.delete(_uri('/api/v1/admin/caregivers/$userId'), headers: _headers()),
     );
   }
 
   Future<List<Map<String, dynamic>>> adminListPatients() async {
     final rows = _asList(
-      await _send(http.get(_uri('/api/v1/admin/patients'), headers: _headers())),
+      await _send(() => _httpClient.get(_uri('/api/v1/admin/patients'), headers: _headers())),
     );
     return rows.whereType<Map<String, dynamic>>().toList();
   }
@@ -499,7 +519,7 @@ class BackendApiClient {
   }) async {
     return _asMap(
       await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/admin/patients'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -514,7 +534,7 @@ class BackendApiClient {
 
   Future<void> adminDeletePatient(String patientId) async {
     await _send(
-      http.delete(_uri('/api/v1/admin/patients/$patientId'), headers: _headers()),
+      () => _httpClient.delete(_uri('/api/v1/admin/patients/$patientId'), headers: _headers()),
     );
   }
 
@@ -524,7 +544,7 @@ class BackendApiClient {
   }) async {
     return _asMap(
       await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/auth/elder/login'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({'username': username, 'password': password}),
@@ -535,7 +555,7 @@ class BackendApiClient {
 
   Future<void> submitFallFeedback(Map<String, dynamic> payload) async {
     await _send(
-      http.post(
+      () => _httpClient.post(
         _uri('/api/v1/events/fall-feedback'),
         headers: _headers(jsonBody: true),
         body: jsonEncode(payload),
@@ -553,7 +573,7 @@ class BackendApiClient {
   }) async {
     return GeneratedPatientCredentialModel.fromJson(
       _asMap(      await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/auth/caregiver/patient-credentials'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
@@ -582,7 +602,7 @@ class BackendApiClient {
   }) async {
     return _asMap(
       await _send(
-        http.post(
+        () => _httpClient.post(
           _uri('/api/v1/inference/motion'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({

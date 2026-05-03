@@ -18,8 +18,19 @@ def model_root() -> Path:
 
 
 def repo_root() -> Path:
-    """Repository root (contains ``models/``, ``scripts/``, ``data/``)."""
+    """Repository root (contains ``models/``, ``scripts/``, ``data/``).
+
+    Set ``REPO_ROOT`` when the app is not laid out as ``<repo>/flask_backend/app`` (e.g. custom deploy).
+    """
+    raw = os.environ.get("REPO_ROOT")
+    if raw:
+        return Path(raw).expanduser().resolve()
     return _REPO_ROOT.resolve()
+
+
+def scripts_dir() -> Path:
+    """Training + inference helpers under ``scripts/`` (fall-type features, etc.)."""
+    return repo_root() / "scripts"
 
 
 def inference_manifest_path() -> Path:

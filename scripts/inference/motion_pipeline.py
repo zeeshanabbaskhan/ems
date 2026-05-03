@@ -7,6 +7,7 @@ for server-side 263-D fall-type feature extraction when windows are provided.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +18,11 @@ import numpy as np
 
 
 def _ensure_scripts_on_path() -> None:
-    repo = Path(__file__).resolve().parents[2]
+    raw = os.environ.get("REPO_ROOT")
+    if raw:
+        repo = Path(raw).expanduser().resolve()
+    else:
+        repo = Path(__file__).resolve().parents[2]
     s = str(repo / "scripts")
     if s not in sys.path:
         sys.path.insert(0, s)

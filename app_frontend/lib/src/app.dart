@@ -80,6 +80,16 @@ class FallAwarePatientHome extends StatefulWidget {
 
 class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
   String? _lastShownKey;
+  bool _fallDialogOpen = false;
+
+  Future<void> _exitToRolePicker(BuildContext context) async {
+    final c = widget.controller;
+    await c.elderSignOut();
+    if (!context.mounted) {
+      return;
+    }
+    runApp(ElderlyMonitorApp(controller: c));
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -87,18 +97,38 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
       listenable: widget.controller,
       builder: (context, _) {
         final m = widget.controller.lastMotionInference;
-        if (m != null && m.isFall) {
-          final key =
-              '${m.fallProbability.toStringAsFixed(3)}_${m.fallTypeCode}_${widget.controller.lastTransmissionAt?.millisecondsSinceEpoch ?? 0}';
-          if (key != _lastShownKey) {
+        final falling = m != null && m.isFall;
+        if (falling) {
+          final motion = m;
+          final key = '${motion.fallTypeCode}_${motion.fallProbability.toStringAsFixed(2)}';
+          if (key != _lastShownKey && !_fallDialogOpen) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!mounted) return;
-              setState(() => _lastShownKey = key);
-              _showFallDialog(context, widget.controller, m, key);
+              if (!mounted || _fallDialogOpen) {
+                return;
+              }
+              setState(() {
+                _lastShownKey = key;
+                _fallDialogOpen = true;
+              });
+              _showFallDialog(context, widget.controller, motion, key);
             });
           }
         }
-        return PatientModeHome(controller: widget.controller);
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('Patient'),
+            actions: [
+              TextButton(
+                onPressed: widget.controller.isBusy ? null : () => _exitToRolePicker(context),
+                child: const Text('Sign out'),
+              ),
+            ],
+          ),
+          body: SafeArea(
+            child: PatientModeHome(controller: widget.controller),
+          ),
+        );
       },
     );
   }
@@ -126,7 +156,11 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
           ],
         );
       },
-    );
+    ).then((_) {
+      if (mounted) {
+        setState(() => _fallDialogOpen = false);
+      }
+    });
 
     Future<void>.delayed(const Duration(seconds: 30), () async {
       if (!context.mounted) return;
@@ -397,7 +431,7 @@ class _CaregiverAuthScreenState extends State<CaregiverAuthScreen> {
             const SizedBox(height: 12),
             _StatusBanner(
               color: const Color(0xFFB53B34),
-              title: 'Sign-in Error',
+              title: _isSignup ? 'Sign-up Error' : 'Sign-in Error',
               message: controller.lastError!,
             ),
           ],
@@ -818,6 +852,7 @@ class CaregiverDashboard extends StatelessWidget {
     return RefreshIndicator(
       onRefresh: () => controller.refreshCaregiverData(),
       child: ListView(
+        physics: const AlwaysScrollableScrollPhysics(),
         padding: const EdgeInsets.all(16),
         children: children,
       ),
@@ -1150,7 +1185,9 @@ class _PatientModeHomeState extends State<PatientModeHome> {
                   const Text('Your map', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
                   const Spacer(),
                   Text(
-                    heading != null ? 'Facing ${_headingToCompassRose(heading!)}' : 'Direction appears when GPS reports heading',
+                    heading != null
+                        ? 'Facing ${_headingToCompassRose(heading)}'
+                        : 'Direction appears when GPS reports heading',
                     style: const TextStyle(fontSize: 12, color: Color(0xFF5D7385)),
                   ),
                 ],

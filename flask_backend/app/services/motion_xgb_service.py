@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 
-_SCRIPTS = Path(__file__).resolve().parents[3] / "scripts"
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
+from flask_backend.app.settings import scripts_dir
+
+_scripts = scripts_dir()
+if str(_scripts) not in sys.path:
+    sys.path.insert(0, str(_scripts))
 
 from inference.motion_pipeline import (
     InferenceArtifacts,

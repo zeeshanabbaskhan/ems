@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import uuid
 
@@ -28,6 +29,8 @@ from flask_backend.app.schemas_fall_feedback import FallFeedbackAck, FallFeedbac
 from flask_backend.app.schemas_motion import MotionInferenceRequest, MotionInferenceResponse
 from flask_backend.app.services.motion_xgb_service import InferenceArtifacts, run_inference
 
+logger = logging.getLogger(__name__)
+
 RESPONSE_DEADLINE_SEC = int(os.environ.get("FALL_RESPONSE_DEADLINE_SEC", "30"))
 EMERGENCY_DEADLINE_SEC = int(os.environ.get("FALL_EMERGENCY_DEADLINE_SEC", "90"))
 
@@ -36,6 +39,16 @@ DETECTOR_CFG = {
     "high_risk_score": 0.58,
     "fall_score": 0.80,
 }
+
+
+def _heuristic_fall_probability(samples_dict: list[dict[str, Any]]) -> float:
+    """Accelerometer-magnitude fallback when ML stack is unavailable or ``run_inference`` fails."""
+    mags: list[float] = []
+    for s in samples_dict:
+        ax, ay, az = s["acc_x"], s["acc_y"], s["acc_z"]
+        mags.append(float((ax * ax + ay * ay + az * az) ** 0.5))
+    return float(min(1.0, max(0.0, (np.max(mags) / 25.0) if mags else 0.0)))
+
 
 router = APIRouter()
 
@@ -683,26 +696,28 @@ def ingest_live(body: IngestLiveBody):
     branch = "unknown"
 
     if art is not None:
-        raw = run_inference(
-            art,
-            feat_vec.tolist(),
-            None,
-            predict_fall_type=True,
-            acc_window=acc_w,
-            gyro_window=gyro_w,
-            ori_window=ori_w,
-        )
-        p_fall = float(raw["fall_probability"])
-        branch = str(raw.get("branch", ""))
-        inferred_activity = raw.get("activity_label") if raw.get("branch") == "adl" else raw.get("fall_type_label")
-        ml_ok = True
+        try:
+            raw = run_inference(
+                art,
+                feat_vec.tolist(),
+                None,
+                predict_fall_type=True,
+                acc_window=acc_w,
+                gyro_window=gyro_w,
+                ori_window=ori_w,
+            )
+            p_fall = float(raw["fall_probability"])
+            branch = str(raw.get("branch", ""))
+            inferred_activity = raw.get("activity_label") if raw.get("branch") == "adl" else raw.get("fall_type_label")
+            ml_ok = True
+        except Exception as exc:
+            logger.warning("run_inference failed; using heuristic fall probability: %s", exc, exc_info=True)
+            p_fall = _heuristic_fall_probability(samples_dict)
+            branch = "unknown"
+            inferred_activity = None
+            ml_ok = False
     else:
-        # heuristic-only when models missing
-        mags = []
-        for s in samples_dict:
-            ax, ay, az = s["acc_x"], s["acc_y"], s["acc_z"]
-            mags.append((ax * ax + ay * ay + az * az) ** 0.5)
-        p_fall = float(min(1.0, max(0.0, (np.max(mags) / 25.0) if mags else 0.0)))
+        p_fall = _heuristic_fall_probability(samples_dict)
 
     detection = build_detection_payload(
         samples=samples_dict,

@@ -29,6 +29,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
   @override
   void dispose() {
+    _client?.close();
     _emailCtrl.dispose();
     _passCtrl.dispose();
     _urlCtrl.dispose();
@@ -42,19 +43,25 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       _dash = null;
       _caregivers = <Map<String, dynamic>>[];
       _patients = <Map<String, dynamic>>[];
-      _client = null;
     });
+    _client?.close();
+    if (mounted) setState(() => _client = null);
+    BackendApiClient? pending;
     try {
-      final c = BackendApiClient(baseUrl: _urlCtrl.text.trim());
-      final login = await c.adminLogin(email: _emailCtrl.text.trim(), password: _passCtrl.text);
+      pending = BackendApiClient(baseUrl: _urlCtrl.text.trim());
+      final login =
+          await pending.adminLogin(email: _emailCtrl.text.trim(), password: _passCtrl.text);
       final tok = login['access_token'] as String? ?? '';
       if (tok.isEmpty) throw Exception('No access_token from admin login');
-      c.setBearerToken(tok);
-      setState(() => _client = c);
+      pending.setBearerToken(tok);
+      if (!mounted) return;
+      setState(() => _client = pending);
+      pending = null;
       await _refreshAll();
     } catch (e) {
-      setState(() => _error = e.toString());
+      if (mounted) setState(() => _error = e.toString());
     } finally {
+      pending?.close();
       if (mounted) setState(() => _busy = false);
     }
   }

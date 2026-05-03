@@ -124,10 +124,15 @@ class _ElderGateScreenState extends State<ElderGateScreen> {
         password: _passCtrl.text,
       );
       final token = map['access_token'] as String? ?? '';
-      final pid = map['patient_id'] as String? ?? '';
+      final rawPid = map['patient_id'];
+      final pid = rawPid is String
+          ? rawPid.trim()
+          : rawPid is num
+              ? rawPid.toString()
+              : '';
       final name = map['display_name'] as String? ?? '';
       if (token.isEmpty || pid.isEmpty) {
-        throw Exception('Invalid elder login response');
+        throw Exception('Invalid elder login response (missing patient link).');
       }
       await widget.controller.applyElderSession(accessToken: token, patientId: pid, displayName: name);
       if (!mounted) return;

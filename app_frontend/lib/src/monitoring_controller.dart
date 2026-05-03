@@ -10,6 +10,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'api_client.dart';
+import 'api_config.dart';
 import 'models.dart';
 import 'motion_inference_helper.dart';
 import 'sensor_streaming_service.dart';
@@ -26,7 +27,18 @@ class MonitoringController extends ChangeNotifier {
               stepSize: offlineWindowStepSamples,
             );
 
-  static const String defaultBackendUrl = 'http://10.0.2.2:8000';
+  /// Single source of truth: [AppApiConfig.backendBaseUrl] (edit there for deploy / local).
+  static const String defaultBackendUrl = AppApiConfig.backendBaseUrl;
+
+  /// Former shipped default; if still stored, migrate so installs pick the configured host.
+  static const String _legacyDefaultBackendUrl = 'http://10.0.2.2:8000';
+
+  static bool _shouldMigrateStoredBackendUrl(String url) {
+    final t = url.trim();
+    if (t == _legacyDefaultBackendUrl) return true;
+    final lower = t.toLowerCase();
+    return lower.startsWith('http://127.0.0.1') || lower.startsWith('http://localhost');
+  }
   static const String defaultDeviceLabel = 'Caregiver Phone';
   static const String elderDeviceLabel = 'Patient phone';
   static const double defaultSampleRateHz = 50.0;
@@ -218,7 +230,14 @@ class MonitoringController extends ChangeNotifier {
     }
 
     _preferences = await SharedPreferences.getInstance();
-    _backendUrl = _preferences?.getString(_backendUrlKey) ?? defaultBackendUrl;
+    final storedUrl = _preferences?.getString(_backendUrlKey);
+    _backendUrl = storedUrl == null || storedUrl.trim().isEmpty
+        ? defaultBackendUrl
+        : storedUrl.trim();
+    if (_shouldMigrateStoredBackendUrl(_backendUrl)) {
+      _backendUrl = defaultBackendUrl;
+      await _preferences?.setString(_backendUrlKey, _backendUrl);
+    }
     _patientName = _preferences?.getString(_patientNameKey) ?? '';
     _patientAge = _preferences?.getInt(_patientAgeKey);
     _deviceLabel = _preferences?.getString(_deviceLabelKey) ?? defaultDeviceLabel;
@@ -333,7 +352,13 @@ class MonitoringController extends ChangeNotifier {
     _disconnectCaregiverAlertSocket();
     _elderAccessToken = accessToken;
     _apiClient.setBearerToken(accessToken);
-    _patientId = patientId;
+    final trimmedPid = patientId.trim();
+    _patientId = trimmedPid.isEmpty ? null : trimmedPid;
+    _sessionId = null;
+    _deviceId = null;
+    _lastMotionInference = null;
+    _lastDetection = null;
+    _activeAlert = null;
     if (displayName != null && displayName.isNotEmpty) {
       _patientName = displayName;
     }
@@ -811,28 +836,57 @@ class MonitoringController extends ChangeNotifier {
     notifyListeners();
 
     try {
+      _statusMessage = 'Checking backend…';
+      notifyListeners();
       final reachable = await refreshBackendReachability(silent: true);
       if (!reachable) {
+        final err = _lastError;
+        final hint =
+            err != null && err.trim().isNotEmpty ? err.trim() : 'no response';
         throw ApiException(
-          'The backend is not reachable. Verify the server is running and the URL is correct.',
+          'Backend ($hint at $_backendUrl). Open $_backendUrl/api/v1/health in the phone browser, '
+          'or fix Wi‑Fi / VPN. Caregiver: confirm Backend URL in setup matches the deployed server.',
         );
       }
 
+      _statusMessage = 'Checking motion sensors…';
+      notifyListeners();
       final sensorStatus = await refreshSensorStatus(silent: true);
       if (!sensorStatus.allAvailable) {
         throw ApiException(
-          'Required phone sensors are not available. Check accelerometer and gyroscope access.',
+          'Phone sensors: accelerometer or gyroscope is not available. Grant motion permissions in '
+          'Android Settings → Apps → this app → Permissions (Physical activity / Sensors).',
         );
       }
 
-      await _ensurePatient();
-      await _ensureDevice();
+      _statusMessage = 'Verifying patient on server…';
+      notifyListeners();
+      try {
+        await _ensurePatient();
+      } catch (e) {
+        throw ApiException('Patient record: ${_formatError(e)}');
+      }
 
-      final session = await _apiClient.startSession(
-        patientId: _patientId!,
-        deviceId: _deviceId!,
-        sampleRateHz: defaultSampleRateHz,
-      );
+      _statusMessage = 'Registering this device…';
+      notifyListeners();
+      try {
+        await _ensureDevice();
+      } catch (e) {
+        throw ApiException('Device registration: ${_formatError(e)}');
+      }
+
+      _statusMessage = 'Starting monitoring session…';
+      notifyListeners();
+      late final SessionRecord session;
+      try {
+        session = await _apiClient.startSession(
+          patientId: _patientId!,
+          deviceId: _deviceId!,
+          sampleRateHz: defaultSampleRateHz,
+        );
+      } catch (e) {
+        throw ApiException('Session start: ${_formatError(e)}');
+      }
 
       _sessionId = session.id;
       _isStreaming = true;
@@ -1162,7 +1216,7 @@ class MonitoringController extends ChangeNotifier {
       }
 
       _backendReachable = false;
-      _lastError = _formatError(error);
+      _lastError = 'Live upload (${samples.length} samples): ${_formatError(error)}';
       _lastBatchSize = samples.length;
       _statusMessage =
           'Streaming is still active on the phone, but the latest batch upload failed.';
@@ -1172,13 +1226,20 @@ class MonitoringController extends ChangeNotifier {
   }
 
   Future<void> _ensurePatient() async {
-    if (_patientId != null) {
+    final existing = _patientId?.trim();
+    if (existing != null && existing.isNotEmpty) {
       try {
-        await _apiClient.getPatient(_patientId!);
+        await _apiClient.getPatient(existing);
         return;
       } catch (_) {
         _patientId = null;
       }
+    }
+
+    if (hasElderSession) {
+      throw ApiException(
+        'Your elder account is not linked to a patient on the server. Sign out, then sign in again with the username and password from your caregiver.',
+      );
     }
 
     final patient = await _apiClient.createPatient(
@@ -1298,6 +1359,35 @@ class MonitoringController extends ChangeNotifier {
     await preferences.remove(_elderAccessTokenKey);
   }
 
+  /// Patient mode: stop streaming, clear elder JWT and local patient/device ids, then return to role picker via [runApp] from UI.
+  Future<void> elderSignOut() async {
+    await _ensureInitialized();
+    if (_isStreaming) {
+      await stopMonitoring();
+    } else {
+      await _sensorService.stop();
+      await WakelockPlus.disable();
+    }
+    _locationSubscription?.cancel();
+    _locationSubscription = null;
+    _locationTrackingEnabled = false;
+    await _clearElderAuth();
+    _apiClient.setBearerToken(null);
+    _patientId = null;
+    _deviceId = null;
+    _sessionId = null;
+    _patientName = '';
+    _patientAge = null;
+    _lastMotionInference = null;
+    _lastDetection = null;
+    _liveStatus = null;
+    _latestTelemetry = null;
+    _lastError = null;
+    await _persistIdentifiers();
+    await _persistSetup();
+    notifyListeners();
+  }
+
   void _ensureAutoRefresh() {
     _autoRefreshTimer?.cancel();
     _autoRefreshTimer = Timer.periodic(const Duration(seconds: 15), (_) {
@@ -1402,6 +1492,7 @@ class MonitoringController extends ChangeNotifier {
     _autoRefreshTimer?.cancel();
     _stopAlarmIfPlaying();
     _locationSubscription?.cancel();
+    _apiClient.close();
     unawaited(_sensorService.stop());
     unawaited(WakelockPlus.disable());
     super.dispose();
