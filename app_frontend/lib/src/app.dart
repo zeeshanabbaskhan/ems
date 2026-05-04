@@ -1,11 +1,10 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
-import 'package:flutter_map/flutter_map.dart';
+import 'package:google_maps_flutter/google_maps_flutter.dart' as gmap;
 import 'package:latlong2/latlong.dart';
 
 import 'models.dart';
 import 'monitoring_controller.dart';
+import 'patient_shell_pages.dart';
 import 'role_launcher.dart';
 
 class ElderlyMonitorApp extends StatefulWidget {
@@ -55,7 +54,9 @@ class _ElderlyMonitorAppState extends State<ElderlyMonitorApp> {
         future: _initializationFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState != ConnectionState.done) {
-            return const Scaffold(body: Center(child: CircularProgressIndicator()));
+            return const Scaffold(
+              body: Center(child: CircularProgressIndicator()),
+            );
           }
           return RoleLauncher(
             controller: _controller,
@@ -68,7 +69,7 @@ class _ElderlyMonitorAppState extends State<ElderlyMonitorApp> {
   }
 }
 
-/// Wraps [PatientModeHome] with fall confirmation dialog + optional escalation alarm.
+/// Wraps [PatientModeHome] with a fall confirmation dialog.
 class FallAwarePatientHome extends StatefulWidget {
   const FallAwarePatientHome({super.key, required this.controller});
 
@@ -81,6 +82,7 @@ class FallAwarePatientHome extends StatefulWidget {
 class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
   String? _lastShownKey;
   bool _fallDialogOpen = false;
+  int _patientTab = 0;
 
   Future<void> _exitToRolePicker(BuildContext context) async {
     final c = widget.controller;
@@ -100,7 +102,8 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
         final falling = m != null && m.isFall;
         if (falling) {
           final motion = m;
-          final key = '${motion.fallTypeCode}_${motion.fallProbability.toStringAsFixed(2)}';
+          final key =
+              '${motion.fallTypeCode}_${motion.fallProbability.toStringAsFixed(2)}';
           if (key != _lastShownKey && !_fallDialogOpen) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!mounted || _fallDialogOpen) {
@@ -117,16 +120,47 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
 
         return Scaffold(
           appBar: AppBar(
-            title: const Text('Patient'),
+            title: Text(
+              _patientTab == 0
+                  ? 'Patient'
+                  : _patientTab == 1
+                  ? 'Live'
+                  : 'Settings',
+            ),
             actions: [
               TextButton(
-                onPressed: widget.controller.isBusy ? null : () => _exitToRolePicker(context),
+                onPressed: widget.controller.isBusy
+                    ? null
+                    : () => _exitToRolePicker(context),
                 child: const Text('Sign out'),
               ),
             ],
           ),
           body: SafeArea(
-            child: PatientModeHome(controller: widget.controller),
+            child: IndexedStack(
+              index: _patientTab,
+              sizing: StackFit.expand,
+              children: [
+                PatientModeHome(controller: widget.controller),
+                PatientLiveSensorPage(controller: widget.controller),
+                PatientSettingsMapPage(controller: widget.controller),
+              ],
+            ),
+          ),
+          bottomNavigationBar: NavigationBar(
+            selectedIndex: _patientTab,
+            onDestinationSelected: (i) => setState(() => _patientTab = i),
+            destinations: const [
+              NavigationDestination(
+                icon: Icon(Icons.shield_outlined),
+                label: 'Home',
+              ),
+              NavigationDestination(icon: Icon(Icons.sensors), label: 'Live'),
+              NavigationDestination(
+                icon: Icon(Icons.map_outlined),
+                label: 'Settings',
+              ),
+            ],
           ),
         );
       },
@@ -147,12 +181,30 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
           title: const Text('Fall detected'),
           content: SingleChildScrollView(child: Text(m.summaryLine)),
           actions: [
-            TextButton(onPressed: () => _submit(ctx, controller, m, 'false_alarm'), child: const Text('No fall')),
-            TextButton(onPressed: () => _submit(ctx, controller, m, 'okay'), child: const Text('I am okay')),
-            TextButton(onPressed: () => _submit(ctx, controller, m, 'need_help'), child: const Text('Need help')),
-            TextButton(onPressed: () => _submit(ctx, controller, m, 'wrong_fall_type'), child: const Text('Wrong type')),
-            TextButton(onPressed: () => _submit(ctx, controller, m, 'correct_fall_type'), child: const Text('Correct type')),
-            TextButton(onPressed: () => _submit(ctx, controller, m, 'no_help_needed'), child: const Text('No help needed')),
+            TextButton(
+              onPressed: () => _submit(ctx, controller, m, 'false_alarm'),
+              child: const Text('No fall'),
+            ),
+            TextButton(
+              onPressed: () => _submit(ctx, controller, m, 'okay'),
+              child: const Text('I am okay'),
+            ),
+            TextButton(
+              onPressed: () => _submit(ctx, controller, m, 'need_help'),
+              child: const Text('Need help'),
+            ),
+            TextButton(
+              onPressed: () => _submit(ctx, controller, m, 'wrong_fall_type'),
+              child: const Text('Wrong type'),
+            ),
+            TextButton(
+              onPressed: () => _submit(ctx, controller, m, 'correct_fall_type'),
+              child: const Text('Correct type'),
+            ),
+            TextButton(
+              onPressed: () => _submit(ctx, controller, m, 'no_help_needed'),
+              child: const Text('No help needed'),
+            ),
           ],
         );
       },
@@ -160,12 +212,6 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
       if (mounted) {
         setState(() => _fallDialogOpen = false);
       }
-    });
-
-    Future<void>.delayed(const Duration(seconds: 30), () async {
-      if (!context.mounted) return;
-      if (_lastShownKey != key) return;
-      await controller.playEscalationFallAlarm();
     });
   }
 
@@ -222,7 +268,10 @@ class _MonitoringShellState extends State<MonitoringShell> {
           minChildSize: 0.38,
           maxChildSize: 0.96,
           builder: (_, scrollController) {
-            return AlertsScreen(controller: widget.controller, scrollController: scrollController);
+            return AlertsScreen(
+              controller: widget.controller,
+              scrollController: scrollController,
+            );
           },
         );
       },
@@ -262,22 +311,33 @@ class _MonitoringShellState extends State<MonitoringShell> {
                     Container(
                       width: double.infinity,
                       color: const Color(0xFFB53B34),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
                       child: SafeArea(
                         bottom: false,
                         child: Row(
                           children: [
-                            const Icon(Icons.notification_important, color: Colors.white),
+                            const Icon(
+                              Icons.notification_important,
+                              color: Colors.white,
+                            ),
                             const SizedBox(width: 8),
                             const Expanded(
                               child: Text(
                                 'Emergency alarm is active',
-                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w700,
+                                ),
                               ),
                             ),
                             TextButton(
                               onPressed: controller.clearActiveAlarm,
-                              style: TextButton.styleFrom(foregroundColor: Colors.white),
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.white,
+                              ),
                               child: const Text('Clear'),
                             ),
                           ],
@@ -303,11 +363,26 @@ class _MonitoringShellState extends State<MonitoringShell> {
                 selectedIcon: Icon(Icons.dashboard),
                 label: 'Dashboard',
               ),
-              NavigationDestination(icon: Icon(Icons.person_add_alt_1_outlined), label: 'Enrollment'),
-              NavigationDestination(icon: Icon(Icons.map_outlined), label: 'Map'),
-              NavigationDestination(icon: Icon(Icons.monitor_heart_outlined), label: 'Live'),
-              NavigationDestination(icon: Icon(Icons.insights_outlined), label: 'Insights'),
-              NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
+              NavigationDestination(
+                icon: Icon(Icons.person_add_alt_1_outlined),
+                label: 'Enrollment',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.map_outlined),
+                label: 'Map',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.monitor_heart_outlined),
+                label: 'Live',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.insights_outlined),
+                label: 'Insights',
+              ),
+              NavigationDestination(
+                icon: Icon(Icons.settings_outlined),
+                label: 'Settings',
+              ),
             ],
           ),
         );
@@ -315,7 +390,10 @@ class _MonitoringShellState extends State<MonitoringShell> {
     );
   }
 
-  Widget _buildCaregiverTabBody(MonitoringController controller, BuildContext context) {
+  Widget _buildCaregiverTabBody(
+    MonitoringController controller,
+    BuildContext context,
+  ) {
     switch (_tabIndex) {
       case 0:
         return CaregiverDashboard(
@@ -391,7 +469,10 @@ class _CaregiverAuthScreenState extends State<CaregiverAuthScreen> {
               children: [
                 Text(
                   _isSignup ? 'Create caregiver account' : 'Caregiver sign in',
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
                 const SizedBox(height: 12),
                 if (_isSignup) ...[
@@ -421,7 +502,9 @@ class _CaregiverAuthScreenState extends State<CaregiverAuthScreen> {
                 TextButton(
                   onPressed: () => setState(() => _isSignup = !_isSignup),
                   child: Text(
-                    _isSignup ? 'Already have an account? Sign in' : 'Need an account? Sign up',
+                    _isSignup
+                        ? 'Already have an account? Sign in'
+                        : 'Need an account? Sign up',
                   ),
                 ),
               ],
@@ -447,7 +530,8 @@ class CaregiverEnrollmentScreen extends StatefulWidget {
   final MonitoringController controller;
 
   @override
-  State<CaregiverEnrollmentScreen> createState() => _CaregiverEnrollmentScreenState();
+  State<CaregiverEnrollmentScreen> createState() =>
+      _CaregiverEnrollmentScreenState();
 }
 
 class _CaregiverEnrollmentScreenState extends State<CaregiverEnrollmentScreen> {
@@ -493,12 +577,12 @@ class _CaregiverEnrollmentScreenState extends State<CaregiverEnrollmentScreen> {
     final enrolled = assigned.isNotEmpty
         ? assigned.first
         : (history.isNotEmpty
-            ? CaregiverAssignedPatientModel(
-                id: history.last.patientId,
-                fullName: history.last.patientName,
-                age: null,
-              )
-            : null);
+              ? CaregiverAssignedPatientModel(
+                  id: history.last.patientId,
+                  fullName: history.last.patientName,
+                  age: null,
+                )
+              : null);
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -520,15 +604,30 @@ class _CaregiverEnrollmentScreenState extends State<CaregiverEnrollmentScreen> {
               children: [
                 Text(
                   enrolled.fullName,
-                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 20),
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 20,
+                  ),
                 ),
                 const SizedBox(height: 6),
-                Text('Patient ID: ${enrolled.id}', style: const TextStyle(color: Color(0xFF5D7385), fontSize: 13)),
+                Text(
+                  'Patient ID: ${enrolled.id}',
+                  style: const TextStyle(
+                    color: Color(0xFF5D7385),
+                    fontSize: 13,
+                  ),
+                ),
                 if (history.isNotEmpty) ...[
                   const SizedBox(height: 12),
-                  _StatCard(label: 'Elder username', value: history.last.username),
+                  _StatCard(
+                    label: 'Elder username',
+                    value: history.last.username,
+                  ),
                   const SizedBox(height: 6),
-                  _StatCard(label: 'Temporary password', value: history.last.temporaryPassword),
+                  _StatCard(
+                    label: 'Temporary password',
+                    value: history.last.temporaryPassword,
+                  ),
                 ],
                 const SizedBox(height: 16),
                 OutlinedButton.icon(
@@ -543,7 +642,10 @@ class _CaregiverEnrollmentScreenState extends State<CaregiverEnrollmentScreen> {
                                 'This deletes their login, devices, and alerts on the server. You can enroll someone new afterward.',
                               ),
                               actions: [
-                                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+                                TextButton(
+                                  onPressed: () => Navigator.pop(ctx, false),
+                                  child: const Text('Cancel'),
+                                ),
                                 FilledButton(
                                   onPressed: () => Navigator.pop(ctx, true),
                                   child: const Text('Remove'),
@@ -570,7 +672,10 @@ class _CaregiverEnrollmentScreenState extends State<CaregiverEnrollmentScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                TextField(controller: _nameCtrl, decoration: const InputDecoration(labelText: 'Patient name')),
+                TextField(
+                  controller: _nameCtrl,
+                  decoration: const InputDecoration(labelText: 'Patient name'),
+                ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: _ageCtrl,
@@ -578,17 +683,28 @@ class _CaregiverEnrollmentScreenState extends State<CaregiverEnrollmentScreen> {
                   decoration: const InputDecoration(labelText: 'Age'),
                 ),
                 const SizedBox(height: 8),
-                TextField(controller: _homeCtrl, decoration: const InputDecoration(labelText: 'Home address')),
+                TextField(
+                  controller: _homeCtrl,
+                  decoration: const InputDecoration(labelText: 'Home address'),
+                ),
                 const SizedBox(height: 8),
                 TextField(
                   controller: _contactCtrl,
-                  decoration: const InputDecoration(labelText: 'Emergency contact'),
+                  decoration: const InputDecoration(
+                    labelText: 'Emergency contact',
+                  ),
                 ),
                 const SizedBox(height: 8),
-                TextField(controller: _notesCtrl, decoration: const InputDecoration(labelText: 'Notes')),
+                TextField(
+                  controller: _notesCtrl,
+                  decoration: const InputDecoration(labelText: 'Notes'),
+                ),
                 const SizedBox(height: 12),
                 FilledButton.icon(
-                  onPressed: (controller.isBusy || !controller.canEnrollAnotherPatient) ? null : _generate,
+                  onPressed:
+                      (controller.isBusy || !controller.canEnrollAnotherPatient)
+                      ? null
+                      : _generate,
                   icon: const Icon(Icons.vpn_key_outlined),
                   label: const Text('Generate credentials'),
                 ),
@@ -602,7 +718,10 @@ class _CaregiverEnrollmentScreenState extends State<CaregiverEnrollmentScreen> {
 }
 
 class _GeneratedCredentialCard extends StatelessWidget {
-  const _GeneratedCredentialCard({required this.credential, required this.index});
+  const _GeneratedCredentialCard({
+    required this.credential,
+    required this.index,
+  });
 
   final GeneratedPatientCredentialModel credential;
   final int index;
@@ -624,7 +743,10 @@ class _GeneratedCredentialCard extends StatelessWidget {
           const SizedBox(height: 8),
           _StatCard(label: 'Username', value: credential.username),
           const SizedBox(height: 8),
-          _StatCard(label: 'Temporary Password', value: credential.temporaryPassword),
+          _StatCard(
+            label: 'Temporary Password',
+            value: credential.temporaryPassword,
+          ),
           const SizedBox(height: 8),
           const Text(
             'Share these credentials securely with the patient device.',
@@ -672,7 +794,11 @@ LiveStatusModel? _worstLiveAmong(
 }
 
 class CaregiverDashboard extends StatelessWidget {
-  const CaregiverDashboard({super.key, required this.controller, required this.onShowAllAlerts});
+  const CaregiverDashboard({
+    super.key,
+    required this.controller,
+    required this.onShowAllAlerts,
+  });
 
   final MonitoringController controller;
   final VoidCallback onShowAllAlerts;
@@ -684,7 +810,8 @@ class CaregiverDashboard extends StatelessWidget {
     final fallback = controller.liveStatus;
     final overviewLive = worst ?? (patients.length <= 1 ? fallback : null);
     final overviewSeverity = overviewLive?.severity ?? 'low';
-    final overviewText = overviewLive?.lastMessage ??
+    final overviewText =
+        overviewLive?.lastMessage ??
         (patients.isEmpty
             ? 'Enroll one patient from the Enrollment tab. They sign in on their own device.'
             : 'When your patient signs in on their device, live status appears here.');
@@ -693,7 +820,10 @@ class CaregiverDashboard extends StatelessWidget {
       if (patients.isNotEmpty)
         const Padding(
           padding: EdgeInsets.only(bottom: 8),
-          child: Text('Your patient', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
+          child: Text(
+            'Your patient',
+            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+          ),
         ),
       _StatusBanner(
         color: _severityColor(overviewSeverity),
@@ -706,13 +836,22 @@ class CaregiverDashboard extends StatelessWidget {
     if (patients.isEmpty) {
       final live = controller.liveStatus;
       final severity = live?.severity ?? 'low';
-      final risk = ((live?.score ?? controller.lastDetection?.score ?? 0) * 100).round();
+      final risk = ((live?.score ?? controller.lastDetection?.score ?? 0) * 100)
+          .round();
       final statusText = live?.lastMessage ?? 'No live data yet.';
-      final movement = (controller.lastDetection?.fallProbability ?? live?.fallProbability ?? 0) * 100;
+      final movement =
+          (controller.lastDetection?.fallProbability ??
+              live?.fallProbability ??
+              0) *
+          100;
       children.addAll([
         _PatientHeroCard(
-          name: controller.patientName.isEmpty ? 'No patient linked' : controller.patientName,
-          age: controller.patientAge == null ? 'Age not set' : '${controller.patientAge} years',
+          name: controller.patientName.isEmpty
+              ? 'No patient linked'
+              : controller.patientName,
+          age: controller.patientAge == null
+              ? 'Age not set'
+              : '${controller.patientAge} years',
           severity: severity,
           lastUpdated: _formatDateTime(controller.lastTransmissionAt),
         ),
@@ -725,9 +864,16 @@ class CaregiverDashboard extends StatelessWidget {
         const SizedBox(height: 16),
         Row(
           children: [
-            Expanded(child: _StatCard(label: 'Risk Score', value: '$risk%')),
+            Expanded(
+              child: _StatCard(label: 'Risk Score', value: '$risk%'),
+            ),
             const SizedBox(width: 10),
-            Expanded(child: _StatCard(label: 'Movement Activity', value: '${movement.toStringAsFixed(0)}%')),
+            Expanded(
+              child: _StatCard(
+                label: 'Movement Activity',
+                value: '${movement.toStringAsFixed(0)}%',
+              ),
+            ),
           ],
         ),
         const SizedBox(height: 10),
@@ -740,9 +886,7 @@ class CaregiverDashboard extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 10),
-            Expanded(
-              child: _MiniTrendCard(value: movement / 100),
-            ),
+            Expanded(child: _MiniTrendCard(value: movement / 100)),
           ],
         ),
       ]);
@@ -752,11 +896,14 @@ class CaregiverDashboard extends StatelessWidget {
         final severity = live?.severity ?? 'low';
         final risk = ((live?.score ?? 0) * 100).round();
         final statusText =
-            live?.lastMessage ?? 'No live data yet. Patient can sign in with generated credentials.';
+            live?.lastMessage ??
+            'No live data yet. Patient can sign in with generated credentials.';
         final movement = (live?.fallProbability ?? 0) * 100;
         final ageLabel = p.age == null ? 'Age not set' : '${p.age} years';
         final updatedLabel = live != null
-            ? (live.locationUpdatedAt != null ? _formatDateTime(live.locationUpdatedAt) : 'live')
+            ? (live.locationUpdatedAt != null
+                  ? _formatDateTime(live.locationUpdatedAt)
+                  : 'live')
             : 'offline';
 
         children.addAll([
@@ -775,9 +922,16 @@ class CaregiverDashboard extends StatelessWidget {
           const SizedBox(height: 10),
           Row(
             children: [
-              Expanded(child: _StatCard(label: 'Risk Score', value: '$risk%')),
+              Expanded(
+                child: _StatCard(label: 'Risk Score', value: '$risk%'),
+              ),
               const SizedBox(width: 10),
-              Expanded(child: _StatCard(label: 'Movement', value: '${movement.toStringAsFixed(0)}%')),
+              Expanded(
+                child: _StatCard(
+                  label: 'Movement',
+                  value: '${movement.toStringAsFixed(0)}%',
+                ),
+              ),
             ],
           ),
           const SizedBox(height: 10),
@@ -790,9 +944,7 @@ class CaregiverDashboard extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 10),
-              Expanded(
-                child: _MiniTrendCard(value: movement / 100),
-              ),
+              Expanded(child: _MiniTrendCard(value: movement / 100)),
             ],
           ),
           const SizedBox(height: 16),
@@ -806,13 +958,21 @@ class CaregiverDashboard extends StatelessWidget {
         const SizedBox(height: 8),
         Row(
           children: [
-            const Text('Open alerts', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+            const Text(
+              'Open alerts',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16),
+            ),
             const Spacer(),
-            TextButton(onPressed: onShowAllAlerts, child: Text('View all (${alerts.length})')),
+            TextButton(
+              onPressed: onShowAllAlerts,
+              child: Text('View all (${alerts.length})'),
+            ),
           ],
         ),
         const SizedBox(height: 6),
-        ...alerts.take(3).map(
+        ...alerts
+            .take(3)
+            .map(
               (a) => Padding(
                 padding: const EdgeInsets.only(bottom: 8),
                 child: _AlertCard(
@@ -839,7 +999,9 @@ class CaregiverDashboard extends StatelessWidget {
           const SizedBox(width: 10),
           Expanded(
             child: FilledButton.icon(
-              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFC2453F)),
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFC2453F),
+              ),
               onPressed: onShowAllAlerts,
               icon: const Icon(Icons.notifications_active_outlined),
               label: const Text('Alerts'),
@@ -869,10 +1031,15 @@ class LiveMonitoringScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final live = controller.liveStatus;
     final severity = live?.severity ?? 'low';
-    final riskValue = (live?.score ?? controller.lastDetection?.score ?? 0).clamp(0.0, 1.0).toDouble();
-    final fallValue = (live?.fallProbability ?? controller.lastDetection?.fallProbability ?? 0)
+    final riskValue = (live?.score ?? controller.lastDetection?.score ?? 0)
         .clamp(0.0, 1.0)
         .toDouble();
+    final fallValue =
+        (live?.fallProbability ??
+                controller.lastDetection?.fallProbability ??
+                0)
+            .clamp(0.0, 1.0)
+            .toDouble();
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -887,23 +1054,40 @@ class LiveMonitoringScreen extends StatelessWidget {
         const SizedBox(height: 16),
         _CircularRiskMeter(label: 'Risk Level', value: riskValue),
         const SizedBox(height: 16),
-        _StatCard(label: 'Movement Intensity', value: '${(fallValue * 100).toStringAsFixed(0)}%'),
+        _StatCard(
+          label: 'Movement Intensity',
+          value: '${(fallValue * 100).toStringAsFixed(0)}%',
+        ),
         const SizedBox(height: 10),
         _StatCard(label: 'Stability', value: _stabilityText(riskValue)),
         const SizedBox(height: 10),
         _StatCard(label: 'Alert Level', value: _severityLabel(severity)),
         const SizedBox(height: 16),
-        const Text('Recent timeline', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18)),
+        const Text(
+          'Recent timeline',
+          style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+        ),
         const SizedBox(height: 8),
-        _TimelineItem(label: _formatDateTime(DateTime.now().subtract(const Duration(minutes: 1))), text: 'Monitoring active'),
-        _TimelineItem(label: _formatDateTime(controller.lastTransmissionAt), text: 'Latest movement analyzed'),
-        _TimelineItem(label: _formatDateTime(DateTime.now()), text: live?.lastMessage ?? 'No abnormal movement'),
+        _TimelineItem(
+          label: _formatDateTime(
+            DateTime.now().subtract(const Duration(minutes: 1)),
+          ),
+          text: 'Monitoring active',
+        ),
+        _TimelineItem(
+          label: _formatDateTime(controller.lastTransmissionAt),
+          text: 'Latest movement analyzed',
+        ),
+        _TimelineItem(
+          label: _formatDateTime(DateTime.now()),
+          text: live?.lastMessage ?? 'No abnormal movement',
+        ),
       ],
     );
   }
 }
 
-/// Full-screen map tab (OpenStreetMap tiles). Patient location comes from backend live feed.
+/// Full-screen map tab (Google Maps). Patient location comes from backend live feed.
 class CaregiverMapTabScreen extends StatelessWidget {
   const CaregiverMapTabScreen({super.key, required this.controller});
 
@@ -911,6 +1095,7 @@ class CaregiverMapTabScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final liveRows = controller.livePatients;
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -924,19 +1109,88 @@ class CaregiverMapTabScreen extends StatelessWidget {
           style: TextStyle(color: Color(0xFF5D7385), fontSize: 14),
         ),
         const SizedBox(height: 14),
-        CaregiverPatientsLocationMap(livePatients: controller.livePatients, mapHeight: 420),
-        const SizedBox(height: 8),
-        const Text(
-          'Map data © OpenStreetMap contributors',
-          style: TextStyle(fontSize: 11, color: Color(0xFF7A8B99)),
+        CaregiverPatientsLocationMap(
+          livePatients: controller.livePatients,
+          mapHeight: 420,
         ),
+        const SizedBox(height: 12),
+        _CaregiverLiveRiskPanel(livePatients: liveRows),
       ],
     );
   }
 }
 
+class _CaregiverLiveRiskPanel extends StatelessWidget {
+  const _CaregiverLiveRiskPanel({required this.livePatients});
+
+  final List<LiveStatusModel> livePatients;
+
+  @override
+  Widget build(BuildContext context) {
+    if (livePatients.isEmpty) {
+      return const _StatusBanner(
+        color: Color(0xFF4A708F),
+        title: 'Live risk analysis',
+        message:
+            'No patient telemetry yet. Ask the patient to sign in and start Active protection.',
+      );
+    }
+
+    final sorted = [...livePatients]
+      ..sort((a, b) => b.score.compareTo(a.score));
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: _cardDecoration(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Live risk analysis',
+            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+          ),
+          const SizedBox(height: 8),
+          ...sorted.map((row) {
+            final riskPercent = (row.score * 100)
+                .clamp(0, 100)
+                .toStringAsFixed(0);
+            final fallPercent = (row.fallProbability * 100)
+                .clamp(0, 100)
+                .toStringAsFixed(0);
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      row.patientName,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  Text(
+                    'Risk $riskPercent% · Fall $fallPercent% · ${_severityLabel(row.severity)}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF4A5E70),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+}
+
 class AlertsScreen extends StatelessWidget {
-  const AlertsScreen({super.key, required this.controller, this.scrollController});
+  const AlertsScreen({
+    super.key,
+    required this.controller,
+    this.scrollController,
+  });
 
   final MonitoringController controller;
   final ScrollController? scrollController;
@@ -980,36 +1234,46 @@ class InsightsScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final risk = ((controller.liveStatus?.score ?? 0) * 100).round();
-    final movement = ((controller.liveStatus?.fallProbability ?? 0) * 100).round();
+    final movement = ((controller.liveStatus?.fallProbability ?? 0) * 100)
+        .round();
     final summary = controller.summary;
     final insight = movement < 25
         ? 'Patient has been less active than usual today.'
         : movement > 70
-            ? 'Higher instability trends detected in recent hours.'
-            : 'Movement pattern appears balanced today.';
+        ? 'Higher instability trends detected in recent hours.'
+        : 'Movement pattern appears balanced today.';
 
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
-        const Text('Daily & Weekly Insights', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
+        const Text(
+          'Daily & Weekly Insights',
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+        ),
         const SizedBox(height: 12),
         Row(
           children: [
-            Expanded(child: _StatCard(label: 'Activity Level', value: '$movement%')),
+            Expanded(
+              child: _StatCard(label: 'Activity Level', value: '$movement%'),
+            ),
             const SizedBox(width: 10),
-            Expanded(child: _StatCard(label: 'Risk Pattern', value: '$risk%')),
+            Expanded(
+              child: _StatCard(label: 'Risk Pattern', value: '$risk%'),
+            ),
           ],
         ),
         const SizedBox(height: 12),
-        _SimpleBarGraph(values: [
-          (movement / 100).clamp(0.1, 1.0),
-          ((movement + 10) / 100).clamp(0.1, 1.0),
-          ((movement - 5) / 100).clamp(0.1, 1.0),
-          ((movement + 8) / 100).clamp(0.1, 1.0),
-          (risk / 100).clamp(0.1, 1.0),
-          ((risk - 7) / 100).clamp(0.1, 1.0),
-          ((risk + 4) / 100).clamp(0.1, 1.0),
-        ]),
+        _SimpleBarGraph(
+          values: [
+            (movement / 100).clamp(0.1, 1.0),
+            ((movement + 10) / 100).clamp(0.1, 1.0),
+            ((movement - 5) / 100).clamp(0.1, 1.0),
+            ((movement + 8) / 100).clamp(0.1, 1.0),
+            (risk / 100).clamp(0.1, 1.0),
+            ((risk - 7) / 100).clamp(0.1, 1.0),
+            ((risk + 4) / 100).clamp(0.1, 1.0),
+          ],
+        ),
         const SizedBox(height: 12),
         _StatusBanner(
           color: const Color(0xFF2A7DA8),
@@ -1029,7 +1293,8 @@ class InsightsScreen extends StatelessWidget {
           const _StatusBanner(
             color: Color(0xFF6B7C8D),
             title: 'Backend summary',
-            message: 'Sign in as caregiver and ensure the server is reachable to load /api/v1/summary.',
+            message:
+                'Sign in as caregiver and ensure the server is reachable to load /api/v1/summary.',
           ),
         ],
       ],
@@ -1047,13 +1312,18 @@ class SettingsScreen extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(20),
       children: [
-        const Text('Settings', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+        const Text(
+          'Settings',
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+        ),
         const SizedBox(height: 16),
         Container(
           decoration: _cardDecoration(),
           child: SwitchListTile(
             title: const Text('Alarm for severe alerts'),
-            subtitle: const Text('Play an in-app sound when a serious alert needs attention'),
+            subtitle: const Text(
+              'Play an in-app sound when a serious alert needs attention',
+            ),
             value: controller.alertViaAlarm,
             onChanged: (v) => controller.setAlertViaAlarm(v),
           ),
@@ -1092,8 +1362,14 @@ class _PatientModeHomeState extends State<PatientModeHome> {
             'Your caregiver is notified in real time through the app when this is sent.',
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Send Alert')),
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Send Alert'),
+            ),
           ],
         );
       },
@@ -1110,8 +1386,6 @@ class _PatientModeHomeState extends State<PatientModeHome> {
       builder: (context, _) {
         final c = widget.controller;
         final severity = c.liveStatus?.severity ?? 'low';
-        final pos = c.currentPosition;
-        final heading = pos != null && pos.heading >= 0 && pos.heading <= 360 ? pos.heading : null;
 
         return ListView(
           padding: const EdgeInsets.all(16),
@@ -1125,7 +1399,10 @@ class _PatientModeHomeState extends State<PatientModeHome> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Your status', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 26)),
+                  const Text(
+                    'Your status',
+                    style: TextStyle(fontWeight: FontWeight.w800, fontSize: 26),
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     c.isStreaming
@@ -1156,7 +1433,9 @@ class _PatientModeHomeState extends State<PatientModeHome> {
             if (c.hasElderSession) ...[
               SwitchListTile(
                 title: const Text('Share live location'),
-                subtitle: const Text('Shows you on the caregiver map and improves directions home.'),
+                subtitle: const Text(
+                  'Shows you on the caregiver map and improves directions home.',
+                ),
                 value: c.locationTrackingEnabled,
                 onChanged: c.isBusy
                     ? null
@@ -1178,66 +1457,14 @@ class _PatientModeHomeState extends State<PatientModeHome> {
                   message: c.locationError!,
                 ),
               ),
-            if (pos != null) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  const Text('Your map', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
-                  const Spacer(),
-                  Text(
-                    heading != null
-                        ? 'Facing ${_headingToCompassRose(heading)}'
-                        : 'Direction appears when GPS reports heading',
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF5D7385)),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Blue arrow = your direction of travel when available. Green = home.',
-                style: TextStyle(fontSize: 12, color: Colors.grey.shade700),
-              ),
-              const SizedBox(height: 8),
-              _LocationMapCard(
-                key: ValueKey('${pos.latitude}_${pos.longitude}_${heading ?? 'nh'}'),
-                current: LatLng(pos.latitude, pos.longitude),
-                home: c.hasHomeLocation ? LatLng(c.homeLatitude!, c.homeLongitude!) : null,
-                compact: false,
-                headingDegrees: heading,
-              ),
-              const Text(
-                'Map © OpenStreetMap contributors',
-                style: TextStyle(fontSize: 11, color: Color(0xFF7A8B99)),
-              ),
-            ] else if (c.hasElderSession) ...[
+            if (c.hasElderSession) ...[
               const SizedBox(height: 8),
               const _StatusBanner(
                 color: Color(0xFF2A7DA8),
-                title: 'Waiting for GPS',
-                message: 'Enable “Share live location” and allow location access to see the map.',
-              ),
-            ],
-            if (pos != null && c.hasHomeLocation) ...[
-              const SizedBox(height: 12),
-              FilledButton.icon(
-                onPressed: () => c.openWalkingDirectionsHome(),
-                icon: const Icon(Icons.directions_walk),
-                label: const Text('Directions home (Google Maps)'),
-              ),
-              const SizedBox(height: 10),
-              _StatusBanner(
-                color: const Color(0xFF2A7DA8),
-                title: 'Toward home',
+                title: 'Map & live distance',
                 message:
-                    '${_distanceKm(pos.latitude, pos.longitude, c.homeLatitude!, c.homeLongitude!).toStringAsFixed(2)} km — head ${_bearingDirection(pos.latitude, pos.longitude, c.homeLatitude!, c.homeLongitude!)}.',
-              ),
-            ] else if (c.hasElderSession) ...[
-              const SizedBox(height: 12),
-              const _StatusBanner(
-                color: Color(0xFF2A7DA8),
-                title: 'Home on map',
-                message:
-                    'When your caregiver saves your home address, a green marker and walking directions appear here.',
+                    'Open the Settings tab to set your home on the map and see live distance from your GPS. '
+                    'Open Live to view accelerometer and gyroscope samples.',
               ),
             ],
             const SizedBox(height: 18),
@@ -1282,21 +1509,36 @@ class _PatientHeroCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(colors: [Color(0xFF0A7FA6), Color(0xFF155A9B)]),
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0A7FA6), Color(0xFF155A9B)],
+        ),
         borderRadius: BorderRadius.circular(22),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(name, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w700)),
+          Text(
+            name,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
           const SizedBox(height: 6),
           Text(age, style: const TextStyle(color: Color(0xFFE3F4FB))),
           const SizedBox(height: 12),
           Row(
             children: [
-              _StatusPill(label: _severityEmoji(severity), color: _severityColor(severity)),
+              _StatusPill(
+                label: _severityEmoji(severity),
+                color: _severityColor(severity),
+              ),
               const SizedBox(width: 10),
-              Text('Updated $lastUpdated', style: const TextStyle(color: Colors.white70)),
+              Text(
+                'Updated $lastUpdated',
+                style: const TextStyle(color: Colors.white70),
+              ),
             ],
           ),
         ],
@@ -1306,7 +1548,11 @@ class _PatientHeroCard extends StatelessWidget {
 }
 
 class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({required this.color, required this.title, required this.message});
+  const _StatusBanner({
+    required this.color,
+    required this.title,
+    required this.message,
+  });
 
   final Color color;
   final String title;
@@ -1323,7 +1569,10 @@ class _StatusBanner extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(title, style: TextStyle(color: color, fontWeight: FontWeight.w700)),
+          Text(
+            title,
+            style: TextStyle(color: color, fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 6),
           Text(message),
         ],
@@ -1342,8 +1591,14 @@ class _StatusPill extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-      decoration: BoxDecoration(color: color.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(999)),
-      child: Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w700)),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.2),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(color: color, fontWeight: FontWeight.w700),
+      ),
     );
   }
 }
@@ -1364,7 +1619,10 @@ class _StatCard extends StatelessWidget {
         children: [
           Text(label, style: const TextStyle(color: Color(0xFF5D7385))),
           const SizedBox(height: 8),
-          Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+          Text(
+            value,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w700),
+          ),
         ],
       ),
     );
@@ -1403,7 +1661,10 @@ class _WavePulseCard extends StatelessWidget {
       child: const Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Motion Activity', style: TextStyle(fontWeight: FontWeight.w700)),
+          Text(
+            'Motion Activity',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
           SizedBox(height: 12),
           Row(
             children: [
@@ -1468,7 +1729,10 @@ class _CircularRiskMeter extends StatelessWidget {
             children: [
               Text(label, style: const TextStyle(fontWeight: FontWeight.w700)),
               const SizedBox(height: 4),
-              Text('${(value * 100).toStringAsFixed(0)}%', style: const TextStyle(fontSize: 22)),
+              Text(
+                '${(value * 100).toStringAsFixed(0)}%',
+                style: const TextStyle(fontSize: 22),
+              ),
             ],
           ),
         ],
@@ -1523,22 +1787,44 @@ class _AlertCard extends StatelessWidget {
             children: [
               _StatusPill(label: _severityLabel(alert.severity), color: color),
               const Spacer(),
-              Text(_formatDateTime(alert.createdAt), style: const TextStyle(color: Color(0xFF6A7B8A))),
+              Text(
+                _formatDateTime(alert.createdAt),
+                style: const TextStyle(color: Color(0xFF6A7B8A)),
+              ),
             ],
           ),
           const SizedBox(height: 10),
-          Text(alert.message, style: const TextStyle(fontWeight: FontWeight.w700)),
+          Text(
+            alert.message,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
           const SizedBox(height: 6),
-          Text(alert.manuallyTriggered ? 'Manual alert' : 'Automatic detection alert'),
+          Text(
+            alert.manuallyTriggered
+                ? 'Manual alert'
+                : 'Automatic detection alert',
+          ),
           const SizedBox(height: 10),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              OutlinedButton(onPressed: onAcknowledge, child: const Text('Acknowledge')),
-              OutlinedButton(onPressed: onResolve, child: const Text('Resolve')),
-              OutlinedButton(onPressed: () {}, child: const Text('Call Patient')),
-              FilledButton(onPressed: () {}, child: const Text('Notify Contact')),
+              OutlinedButton(
+                onPressed: onAcknowledge,
+                child: const Text('Acknowledge'),
+              ),
+              OutlinedButton(
+                onPressed: onResolve,
+                child: const Text('Resolve'),
+              ),
+              OutlinedButton(
+                onPressed: () {},
+                child: const Text('Call Patient'),
+              ),
+              FilledButton(
+                onPressed: () {},
+                child: const Text('Notify Contact'),
+              ),
             ],
           ),
         ],
@@ -1567,7 +1853,10 @@ class CaregiverPatientsLocationMap extends StatelessWidget {
         child: const Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('No positions yet', style: TextStyle(fontWeight: FontWeight.w700)),
+            Text(
+              'No positions yet',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
             SizedBox(height: 8),
             Text(
               'When an elder signs in on their phone, enables GPS, and walks outside, their last location appears here.',
@@ -1578,14 +1867,16 @@ class CaregiverPatientsLocationMap extends StatelessWidget {
       );
     }
 
-    final points = withLoc.map((p) => LatLng(p.latitude!, p.longitude!)).toList();
+    final points = withLoc
+        .map((p) => gmap.LatLng(p.latitude!, p.longitude!))
+        .toList();
     double sumLat = 0, sumLon = 0;
     for (final q in points) {
       sumLat += q.latitude;
       sumLon += q.longitude;
     }
     final n = points.length;
-    final center = LatLng(sumLat / n, sumLon / n);
+    final center = gmap.LatLng(sumLat / n, sumLon / n);
 
     return Container(
       height: mapHeight,
@@ -1595,54 +1886,30 @@ class CaregiverPatientsLocationMap extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: FlutterMap(
-              options: MapOptions(
-                initialCenter: center,
-                initialZoom: n == 1 ? 15 : 11,
+            child: gmap.GoogleMap(
+              initialCameraPosition: gmap.CameraPosition(
+                target: center,
+                zoom: n == 1 ? 15 : 11,
               ),
-              children: [
-                TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.example.newapp',
-                ),
-                MarkerLayer(
-                  markers: [
-                    for (final p in withLoc)
-                      Marker(
-                        point: LatLng(p.latitude!, p.longitude!),
-                        width: 160,
-                        height: 52,
-                        alignment: Alignment.bottomCenter,
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(8),
-                                boxShadow: const [
-                                  BoxShadow(color: Color(0x33000000), blurRadius: 4),
-                                ],
-                              ),
-                              child: Text(
-                                p.patientName,
-                                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            p.headingDegrees != null
-                                ? Transform.rotate(
-                                    angle: (p.headingDegrees! * math.pi / 180) - math.pi / 2,
-                                    child: const Icon(Icons.navigation, color: Color(0xFF155A9B), size: 36),
-                                  )
-                                : const Icon(Icons.location_on, color: Color(0xFF155A9B), size: 32),
-                          ],
-                        ),
-                      ),
-                  ],
-                ),
-              ],
+              myLocationButtonEnabled: false,
+              mapToolbarEnabled: false,
+              markers: {
+                for (final p in withLoc)
+                  gmap.Marker(
+                    markerId: gmap.MarkerId(p.patientId),
+                    position: gmap.LatLng(p.latitude!, p.longitude!),
+                    icon: gmap.BitmapDescriptor.defaultMarkerWithHue(
+                      p.headingDegrees != null
+                          ? gmap.BitmapDescriptor.hueAzure
+                          : gmap.BitmapDescriptor.hueRed,
+                    ),
+                    infoWindow: gmap.InfoWindow(
+                      title: p.patientName,
+                      snippet:
+                          '${p.latitude!.toStringAsFixed(5)}, ${p.longitude!.toStringAsFixed(5)}',
+                    ),
+                  ),
+              },
             ),
           ),
           Padding(
@@ -1654,7 +1921,10 @@ class CaregiverPatientsLocationMap extends StatelessWidget {
                 for (final p in withLoc)
                   Text(
                     '${p.patientName}: ${p.latitude!.toStringAsFixed(4)}, ${p.longitude!.toStringAsFixed(4)}',
-                    style: const TextStyle(fontSize: 12, color: Color(0xFF4A5E70)),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF4A5E70),
+                    ),
                   ),
               ],
             ),
@@ -1674,63 +1944,52 @@ class _LocationMapCard extends StatelessWidget {
     this.headingDegrees,
   });
 
-  final LatLng current;
-  final LatLng? home;
+  final gmap.LatLng current;
+  final gmap.LatLng? home;
   final bool compact;
   final double? headingDegrees;
 
   @override
   Widget build(BuildContext context) {
-    final points = <LatLng>[if (home != null) home!, current];
-    final Widget youMarker = headingDegrees != null
-        ? Transform.rotate(
-            angle: (headingDegrees! * math.pi / 180) - math.pi / 2,
-            child: const Icon(Icons.navigation, color: Color(0xFF155A9B), size: 40),
-          )
-        : const Icon(Icons.person_pin_circle, color: Color(0xFF155A9B), size: 34);
+    final points = <gmap.LatLng>[if (home != null) home!, current];
     return Container(
       height: compact ? 200 : 280,
       clipBehavior: Clip.antiAlias,
       decoration: _cardDecoration(),
-      child: FlutterMap(
-        options: MapOptions(
-          initialCenter: current,
-          initialZoom: 15,
-        ),
-        children: [
-          TileLayer(
-            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-            userAgentPackageName: 'com.example.newapp',
-          ),
-          if (points.length == 2)
-            PolylineLayer(
-              polylines: [
-                Polyline(
-                  points: points,
-                  strokeWidth: 4,
-                  color: const Color(0xFF2A7DA8),
-                ),
-              ],
+      child: gmap.GoogleMap(
+        initialCameraPosition: gmap.CameraPosition(target: current, zoom: 15),
+        mapToolbarEnabled: false,
+        myLocationButtonEnabled: false,
+        markers: {
+          gmap.Marker(
+            markerId: const gmap.MarkerId('current'),
+            position: current,
+            icon: gmap.BitmapDescriptor.defaultMarkerWithHue(
+              headingDegrees != null
+                  ? gmap.BitmapDescriptor.hueAzure
+                  : gmap.BitmapDescriptor.hueRed,
             ),
-          MarkerLayer(
-            markers: [
-              Marker(
-                point: current,
-                width: 48,
-                height: 48,
-                alignment: Alignment.center,
-                child: youMarker,
-              ),
-              if (home != null)
-                Marker(
-                  point: home!,
-                  width: 40,
-                  height: 40,
-                  child: const Icon(Icons.home_rounded, color: Color(0xFF1B9B8B), size: 30),
-                ),
-            ],
+            infoWindow: const gmap.InfoWindow(title: 'Current location'),
           ),
-        ],
+          if (home != null)
+            gmap.Marker(
+              markerId: const gmap.MarkerId('home'),
+              position: home!,
+              icon: gmap.BitmapDescriptor.defaultMarkerWithHue(
+                gmap.BitmapDescriptor.hueGreen,
+              ),
+              infoWindow: const gmap.InfoWindow(title: 'Saved home'),
+            ),
+        },
+        polylines: {
+          if (points.length == 2)
+            gmap.Polyline(
+              polylineId: const gmap.PolylineId('home_line'),
+              points: points,
+              width: 4,
+              color: const Color(0xFF2A7DA8),
+            ),
+        },
       ),
     );
   }
@@ -1772,7 +2031,9 @@ BoxDecoration _cardDecoration() {
   return BoxDecoration(
     color: Colors.white,
     borderRadius: BorderRadius.circular(16),
-    boxShadow: const [BoxShadow(color: Color(0x140F2E4D), blurRadius: 14, offset: Offset(0, 6))],
+    boxShadow: const [
+      BoxShadow(color: Color(0x140F2E4D), blurRadius: 14, offset: Offset(0, 6)),
+    ],
   );
 }
 
@@ -1831,7 +2092,11 @@ String _stabilityText(double riskValue) {
 
 double _distanceKm(double lat1, double lon1, double lat2, double lon2) {
   const distance = Distance();
-  return distance.as(LengthUnit.Kilometer, LatLng(lat1, lon1), LatLng(lat2, lon2));
+  return distance.as(
+    LengthUnit.Kilometer,
+    LatLng(lat1, lon1),
+    LatLng(lat2, lon2),
+  );
 }
 
 String _headingToCompassRose(double headingDegrees) {

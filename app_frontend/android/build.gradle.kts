@@ -5,10 +5,9 @@ allprojects {
     }
 }
 
+// Gradle outputs under app_frontend/build (sibling of android/), not android/build.
 val newBuildDir: Directory =
-    rootProject.layout.buildDirectory
-        .dir("../../build")
-        .get()
+    rootProject.layout.buildDirectory.dir("../../build").get()
 rootProject.layout.buildDirectory.value(newBuildDir)
 
 subprojects {

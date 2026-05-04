@@ -694,6 +694,7 @@ def ingest_live(body: IngestLiveBody):
     ml_ok = False
     p_fall = 0.0
     branch = "unknown"
+    inference_source = "heuristic"
 
     if art is not None:
         try:
@@ -710,14 +711,38 @@ def ingest_live(body: IngestLiveBody):
             branch = str(raw.get("branch", ""))
             inferred_activity = raw.get("activity_label") if raw.get("branch") == "adl" else raw.get("fall_type_label")
             ml_ok = True
+            inference_source = "model"
+            logger.info(
+                "[ingest/live] inference=model patient_id=%s session_id=%s samples=%d branch=%s p_fall=%.4f",
+                body.patient_id,
+                body.session_id,
+                len(samples_dict),
+                branch,
+                p_fall,
+            )
         except Exception as exc:
             logger.warning("run_inference failed; using heuristic fall probability: %s", exc, exc_info=True)
             p_fall = _heuristic_fall_probability(samples_dict)
             branch = "unknown"
             inferred_activity = None
             ml_ok = False
+            inference_source = "heuristic"
+            logger.info(
+                "[ingest/live] inference=heuristic patient_id=%s session_id=%s samples=%d reason=run_inference_failed p_fall=%.4f",
+                body.patient_id,
+                body.session_id,
+                len(samples_dict),
+                p_fall,
+            )
     else:
         p_fall = _heuristic_fall_probability(samples_dict)
+        logger.info(
+            "[ingest/live] inference=heuristic patient_id=%s session_id=%s samples=%d reason=artifacts_not_loaded p_fall=%.4f",
+            body.patient_id,
+            body.session_id,
+            len(samples_dict),
+            p_fall,
+        )
 
     detection = build_detection_payload(
         samples=samples_dict,
@@ -725,6 +750,14 @@ def ingest_live(body: IngestLiveBody):
         inferred_activity=inferred_activity,
         ml_ok=ml_ok,
         threshold=thr,
+    )
+    logger.info(
+        "[ingest/live] detection source=%s patient_id=%s severity=%s score=%.4f fall_probability=%.4f",
+        inference_source,
+        body.patient_id,
+        detection.get("severity", "unknown"),
+        float(detection.get("score", 0.0)),
+        p_fall,
     )
 
     active_alert = None

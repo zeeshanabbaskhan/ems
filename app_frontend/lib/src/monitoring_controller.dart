@@ -19,13 +19,14 @@ class MonitoringController extends ChangeNotifier {
   MonitoringController({
     BackendApiClient? apiClient,
     SensorStreamingService? sensorService,
-  })  : _apiClient = apiClient ?? BackendApiClient(baseUrl: defaultBackendUrl),
-        _sensorService = sensorService ??
-            SensorStreamingService(
-              targetSamplingRateHz: defaultSampleRateHz,
-              windowSize: offlineWindowSizeSamples,
-              stepSize: offlineWindowStepSamples,
-            );
+  }) : _apiClient = apiClient ?? BackendApiClient(baseUrl: defaultBackendUrl),
+       _sensorService =
+           sensorService ??
+           SensorStreamingService(
+             targetSamplingRateHz: defaultSampleRateHz,
+             windowSize: offlineWindowSizeSamples,
+             stepSize: offlineWindowStepSamples,
+           );
 
   /// Single source of truth: [AppApiConfig.backendBaseUrl] (edit there for deploy / local).
   static const String defaultBackendUrl = AppApiConfig.backendBaseUrl;
@@ -37,8 +38,10 @@ class MonitoringController extends ChangeNotifier {
     final t = url.trim();
     if (t == _legacyDefaultBackendUrl) return true;
     final lower = t.toLowerCase();
-    return lower.startsWith('http://127.0.0.1') || lower.startsWith('http://localhost');
+    return lower.startsWith('http://127.0.0.1') ||
+        lower.startsWith('http://localhost');
   }
+
   static const String defaultDeviceLabel = 'Caregiver Phone';
   static const String elderDeviceLabel = 'Patient phone';
   static const double defaultSampleRateHz = 50.0;
@@ -102,6 +105,10 @@ class MonitoringController extends ChangeNotifier {
   LiveStatusModel? _liveStatus;
   AlertRecordModel? _activeAlert;
   TelemetrySnapshotModel? _latestTelemetry;
+
+  /// Recent raw samples from the latest phone batch (for patient Live tab).
+  final List<SensorReadingPayload> _liveSensorSnapshot =
+      <SensorReadingPayload>[];
   SensorAccessStatus? _sensorAccessStatus;
   String _medicalNotes = '';
   String _emergencyContact = '';
@@ -128,8 +135,10 @@ class MonitoringController extends ChangeNotifier {
   String _caregiverAuthEmail = '';
   String? _elderAccessToken;
   DateTime? _lastLocationUploadAt;
-  final List<GeneratedPatientCredentialModel> _credentialHistory = <GeneratedPatientCredentialModel>[];
-  List<CaregiverAssignedPatientModel> _assignedPatients = <CaregiverAssignedPatientModel>[];
+  final List<GeneratedPatientCredentialModel> _credentialHistory =
+      <GeneratedPatientCredentialModel>[];
+  List<CaregiverAssignedPatientModel> _assignedPatients =
+      <CaregiverAssignedPatientModel>[];
 
   bool get initialized => _initialized;
   bool get isBusy => _isBusy;
@@ -146,6 +155,7 @@ class MonitoringController extends ChangeNotifier {
         _patientName.trim().isNotEmpty &&
         _deviceLabel.trim().isNotEmpty;
   }
+
   bool get isReady => hasSetup && _backendReachable;
 
   String get backendUrl => _backendUrl;
@@ -165,13 +175,30 @@ class MonitoringController extends ChangeNotifier {
   LiveStatusModel? get liveStatus => _liveStatus;
   AlertRecordModel? get activeAlert => _activeAlert;
   TelemetrySnapshotModel? get latestTelemetry => _latestTelemetry;
+
+  /// Live rows: last streamed batch, or last server echo from telemetry when not streaming.
+  List<SensorReadingPayload> get displayedLiveSensorRows {
+    if (_liveSensorSnapshot.isNotEmpty) {
+      return List.unmodifiable(_liveSensorSnapshot);
+    }
+    final tel = _latestTelemetry;
+    final s = tel?.latestSamples;
+    if (s == null || s.isEmpty) {
+      return const <SensorReadingPayload>[];
+    }
+    const maxRows = 32;
+    final start = s.length > maxRows ? s.length - maxRows : 0;
+    return List.unmodifiable(s.sublist(start));
+  }
+
   SensorAccessStatus? get sensorAccessStatus => _sensorAccessStatus;
   String get medicalNotes => _medicalNotes;
   String get emergencyContact => _emergencyContact;
   String? get photoPath => _photoPath;
   SystemSummaryModel? get summary => _summary;
   List<LiveStatusModel> get livePatients => List.unmodifiable(_livePatients);
-  List<AlertRecordModel> get caregiverAlerts => List.unmodifiable(_caregiverAlerts);
+  List<AlertRecordModel> get caregiverAlerts =>
+      List.unmodifiable(_caregiverAlerts);
   bool get notificationsEnabled => _notificationsEnabled;
   String get alertSensitivity => _alertSensitivity;
   bool get alertViaEmail => _alertViaEmail;
@@ -187,11 +214,14 @@ class MonitoringController extends ChangeNotifier {
 
   bool get hasElderSession =>
       _elderAccessToken != null && _elderAccessToken!.trim().isNotEmpty;
-  bool get isCaregiverAuthenticated => _caregiverToken != null && _caregiverToken!.isNotEmpty;
+  bool get isCaregiverAuthenticated =>
+      _caregiverToken != null && _caregiverToken!.isNotEmpty;
   String get caregiverName => _caregiverName;
   String get caregiverAuthEmail => _caregiverAuthEmail;
-  List<GeneratedPatientCredentialModel> get credentialHistory => List.unmodifiable(_credentialHistory);
-  List<CaregiverAssignedPatientModel> get assignedPatients => List.unmodifiable(_assignedPatients);
+  List<GeneratedPatientCredentialModel> get credentialHistory =>
+      List.unmodifiable(_credentialHistory);
+  List<CaregiverAssignedPatientModel> get assignedPatients =>
+      List.unmodifiable(_assignedPatients);
 
   /// Patients to show on the caregiver dashboard (server list, or session credential fallbacks).
   List<CaregiverAssignedPatientModel> get dashboardPatients {
@@ -240,14 +270,17 @@ class MonitoringController extends ChangeNotifier {
     }
     _patientName = _preferences?.getString(_patientNameKey) ?? '';
     _patientAge = _preferences?.getInt(_patientAgeKey);
-    _deviceLabel = _preferences?.getString(_deviceLabelKey) ?? defaultDeviceLabel;
+    _deviceLabel =
+        _preferences?.getString(_deviceLabelKey) ?? defaultDeviceLabel;
     _patientId = _preferences?.getString(_patientIdKey);
     _deviceId = _preferences?.getString(_deviceIdKey);
     _medicalNotes = _preferences?.getString(_medicalNotesKey) ?? '';
     _emergencyContact = _preferences?.getString(_emergencyContactKey) ?? '';
     _photoPath = _preferences?.getString(_photoPathKey);
-    _notificationsEnabled = _preferences?.getBool(_notificationsEnabledKey) ?? true;
-    _alertSensitivity = _preferences?.getString(_alertSensitivityKey) ?? 'medium';
+    _notificationsEnabled =
+        _preferences?.getBool(_notificationsEnabledKey) ?? true;
+    _alertSensitivity =
+        _preferences?.getString(_alertSensitivityKey) ?? 'medium';
     _alertViaEmail = _preferences?.getBool(_alertViaEmailKey) ?? false;
     _alertViaAlarm = _preferences?.getBool(_alertViaAlarmKey) ?? true;
     _caregiverEmail = _preferences?.getString(_caregiverEmailKey) ?? '';
@@ -443,7 +476,9 @@ class MonitoringController extends ChangeNotifier {
         fullName: fullName.trim(),
         age: age,
         homeAddress: homeAddress.trim(),
-        emergencyContact: emergencyContact.trim().isEmpty ? null : emergencyContact.trim(),
+        emergencyContact: emergencyContact.trim().isEmpty
+            ? null
+            : emergencyContact.trim(),
         notes: notes.trim().isEmpty ? null : notes.trim(),
       );
       _credentialHistory.add(created);
@@ -484,7 +519,8 @@ class MonitoringController extends ChangeNotifier {
     if (permission == LocationPermission.denied) {
       permission = await Geolocator.requestPermission();
     }
-    if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
       _locationTrackingEnabled = false;
       _locationError = 'Location permission denied.';
       notifyListeners();
@@ -493,23 +529,24 @@ class MonitoringController extends ChangeNotifier {
 
     _locationTrackingEnabled = true;
     await _locationSubscription?.cancel();
-    _locationSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 5,
-      ),
-    ).listen(
-      (position) {
-        _currentPosition = position;
-        _locationError = null;
-        unawaited(_throttledUploadPatientLocation(position));
-        notifyListeners();
-      },
-      onError: (error) {
-        _locationError = error.toString();
-        notifyListeners();
-      },
-    );
+    _locationSubscription =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 5,
+          ),
+        ).listen(
+          (position) {
+            _currentPosition = position;
+            _locationError = null;
+            unawaited(_throttledUploadPatientLocation(position));
+            notifyListeners();
+          },
+          onError: (error) {
+            _locationError = error.toString();
+            notifyListeners();
+          },
+        );
 
     try {
       _currentPosition ??= await Geolocator.getCurrentPosition();
@@ -586,6 +623,20 @@ class MonitoringController extends ChangeNotifier {
     _homeLatitude = null;
     _homeLongitude = null;
     await _persistHomeLocation();
+    notifyListeners();
+  }
+
+  /// Set home from a map tap or search result (patient Settings).
+  Future<void> setHomeLocationFromCoordinates(
+    double latitude,
+    double longitude,
+  ) async {
+    final lat = latitude.clamp(-90.0, 90.0);
+    final lon = longitude.clamp(-180.0, 180.0);
+    _homeLatitude = lat;
+    _homeLongitude = lon;
+    await _persistHomeLocation();
+    _statusMessage = 'Home saved on map.';
     notifyListeners();
   }
 
@@ -718,11 +769,13 @@ class MonitoringController extends ChangeNotifier {
   }) async {
     await _ensureInitialized();
 
-    final normalizedBackendUrl =
-        backendUrl.trim().isEmpty ? defaultBackendUrl : backendUrl.trim();
+    final normalizedBackendUrl = backendUrl.trim().isEmpty
+        ? defaultBackendUrl
+        : backendUrl.trim();
     final normalizedPatientName = patientName.trim();
-    final normalizedDeviceLabel =
-        deviceLabel.trim().isEmpty ? defaultDeviceLabel : deviceLabel.trim();
+    final normalizedDeviceLabel = deviceLabel.trim().isEmpty
+        ? defaultDeviceLabel
+        : deviceLabel.trim();
 
     int? parsedAge;
     final trimmedAge = patientAgeText.trim();
@@ -735,7 +788,8 @@ class MonitoringController extends ChangeNotifier {
       }
     }
 
-    final patientChanged = _patientName != normalizedPatientName || _patientAge != parsedAge;
+    final patientChanged =
+        _patientName != normalizedPatientName || _patientAge != parsedAge;
     final deviceChanged = _deviceLabel != normalizedDeviceLabel;
 
     _isBusy = true;
@@ -774,7 +828,8 @@ class MonitoringController extends ChangeNotifier {
           : 'Setup saved. Backend could not be reached yet.';
     } catch (error) {
       _lastError = _formatError(error);
-      _statusMessage = 'Setup was updated locally, but the connection check failed.';
+      _statusMessage =
+          'Setup was updated locally, but the connection check failed.';
     } finally {
       _isBusy = false;
       notifyListeners();
@@ -841,8 +896,9 @@ class MonitoringController extends ChangeNotifier {
       final reachable = await refreshBackendReachability(silent: true);
       if (!reachable) {
         final err = _lastError;
-        final hint =
-            err != null && err.trim().isNotEmpty ? err.trim() : 'no response';
+        final hint = err != null && err.trim().isNotEmpty
+            ? err.trim()
+            : 'no response';
         throw ApiException(
           'Backend ($hint at $_backendUrl). Open $_backendUrl/api/v1/health in the phone browser, '
           'or fix Wi‑Fi / VPN. Caregiver: confirm Backend URL in setup matches the deployed server.',
@@ -911,7 +967,8 @@ class MonitoringController extends ChangeNotifier {
       await _persistIdentifiers();
       await _sensorService.start(_handleSensorBatch);
       await WakelockPlus.enable();
-      _statusMessage = 'Monitoring is live. The phone is now streaming sensor batches.';
+      _statusMessage =
+          'Monitoring is live. The phone is now streaming sensor batches.';
     } catch (error) {
       _isStreaming = false;
       _sessionId = null;
@@ -941,6 +998,7 @@ class MonitoringController extends ChangeNotifier {
     try {
       await _sensorService.stop();
       _isStreaming = false;
+      _liveSensorSnapshot.clear();
 
       if (currentSessionId != null) {
         await _apiClient.stopSession(currentSessionId);
@@ -988,7 +1046,10 @@ class MonitoringController extends ChangeNotifier {
       if (p.endsWith('/')) {
         p = p.substring(0, p.length - 1);
       }
-      final wsPath = '${p.isEmpty ? '' : p}/api/v1/ws/caregiver'.replaceAll('//', '/');
+      final wsPath = '${p.isEmpty ? '' : p}/api/v1/ws/caregiver'.replaceAll(
+        '//',
+        '/',
+      );
       final uri = Uri(
         scheme: scheme,
         host: base.host,
@@ -1099,7 +1160,9 @@ class MonitoringController extends ChangeNotifier {
       }
 
       if (_patientId != null) {
-        final matched = _livePatients.where((item) => item.patientId == _patientId).toList();
+        final matched = _livePatients
+            .where((item) => item.patientId == _patientId)
+            .toList();
         if (matched.isNotEmpty) {
           _liveStatus = matched.first;
         }
@@ -1164,6 +1227,14 @@ class MonitoringController extends ChangeNotifier {
       return;
     }
 
+    const maxSnap = 48;
+    final slice = samples.length > maxSnap
+        ? samples.sublist(samples.length - maxSnap)
+        : samples;
+    _liveSensorSnapshot
+      ..clear()
+      ..addAll(slice.map((e) => SensorReadingPayload.fromJson(e.toJson())));
+
     final currentSessionId = _sessionId;
 
     try {
@@ -1216,7 +1287,8 @@ class MonitoringController extends ChangeNotifier {
       }
 
       _backendReachable = false;
-      _lastError = 'Live upload (${samples.length} samples): ${_formatError(error)}';
+      _lastError =
+          'Live upload (${samples.length} samples): ${_formatError(error)}';
       _lastBatchSize = samples.length;
       _statusMessage =
           'Streaming is still active on the phone, but the latest batch upload failed.';
@@ -1382,6 +1454,7 @@ class MonitoringController extends ChangeNotifier {
     _lastDetection = null;
     _liveStatus = null;
     _latestTelemetry = null;
+    _liveSensorSnapshot.clear();
     _lastError = null;
     await _persistIdentifiers();
     await _persistSetup();
@@ -1398,16 +1471,27 @@ class MonitoringController extends ChangeNotifier {
   }
 
   void _syncAlarmWithAlerts() {
+    // Alarm is caregiver-only. Never play on patient/elder sessions.
+    if (!isCaregiverAuthenticated) {
+      _stopAlarmIfPlaying();
+      return;
+    }
+
     final hasSevereOpenAlert = _caregiverAlerts.any(
-          (alert) =>
-              alert.status != 'resolved' &&
-              (alert.severity == 'high_risk' || alert.severity == 'fall_detected'));
+      (alert) =>
+          alert.status != 'resolved' &&
+          (alert.severity == 'high_risk' || alert.severity == 'fall_detected'),
+    );
 
     if (!hasSevereOpenAlert && _alarmSilencedByUser) {
       _alarmSilencedByUser = false;
     }
 
-    final shouldPlay = _notificationsEnabled && _alertViaAlarm && hasSevereOpenAlert && !_alarmSilencedByUser;
+    final shouldPlay =
+        _notificationsEnabled &&
+        _alertViaAlarm &&
+        hasSevereOpenAlert &&
+        !_alarmSilencedByUser;
 
     if (shouldPlay && !_alarmPlaying) {
       FlutterRingtonePlayer().playAlarm(
@@ -1432,10 +1516,17 @@ class MonitoringController extends ChangeNotifier {
     _alarmPlaying = false;
   }
 
-  /// Loud alarm if elder does not dismiss fall dialog (escalation ladder).
+  /// Backward-compatible entry point: only caregivers can play in-app alarm.
   Future<void> playEscalationFallAlarm() async {
+    if (!isCaregiverAuthenticated) {
+      return;
+    }
     if (!_alarmPlaying) {
-      FlutterRingtonePlayer().playAlarm(looping: true, volume: 1.0, asAlarm: true);
+      FlutterRingtonePlayer().playAlarm(
+        looping: true,
+        volume: 1.0,
+        asAlarm: true,
+      );
       _alarmPlaying = true;
       notifyListeners();
     }

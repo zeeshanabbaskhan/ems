@@ -38,7 +38,7 @@ dependencies:
   shared_preferences: ^2.3.2
   flutter_ringtone_player: ^4.0.0+4
   geolocator: ^14.0.2
-  flutter_map: ^8.3.0
+  google_maps_flutter: ^2.12.3
   latlong2: ^0.9.1
   url_launcher: ^6.3.1
   web_socket_channel: ^3.0.1

@@ -7,6 +7,43 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
+/// FastAPI / SQLite may encode numbers as int, double, or string; some maps mix in strings (e.g. `branch`).
+int? _parseIntLoose(dynamic v) {
+  if (v == null) return null;
+  if (v is int) return v;
+  if (v is num) return v.toInt();
+  if (v is String) return int.tryParse(v.trim());
+  return null;
+}
+
+int _parseIntLooseWithDefault(dynamic v, [int fallback = 0]) =>
+    _parseIntLoose(v) ?? fallback;
+
+double? _parseDoubleLoose(dynamic v) {
+  if (v == null) return null;
+  if (v is num) return v.toDouble();
+  if (v is String) return double.tryParse(v.trim());
+  if (v is bool) return v ? 1.0 : 0.0;
+  return null;
+}
+
+double _parseDoubleLooseWithDefault(dynamic v, [double fallback = 0.0]) =>
+    _parseDoubleLoose(v) ?? fallback;
+
+Map<String, double> _parseMetricsMap(dynamic raw) {
+  if (raw is! Map) return const {};
+  final out = <String, double>{};
+  for (final e in raw.entries) {
+    final k = e.key;
+    if (k is! String) continue;
+    final d = _parseDoubleLoose(e.value);
+    if (d != null) {
+      out[k] = d;
+    }
+  }
+  return out;
+}
+
 enum UserRole {
   patient,
   caregiver;
@@ -157,7 +194,7 @@ class PatientRecord {
     return PatientRecord(
       id: json['id'] as String,
       fullName: json['full_name'] as String? ?? 'Unknown Patient',
-      age: json['age'] as int?,
+      age: _parseIntLoose(json['age']),
     );
   }
 }
@@ -199,7 +236,7 @@ class SessionRecord {
       patientId: json['patient_id'] as String,
       deviceId: json['device_id'] as String,
       status: json['status'] as String? ?? 'active',
-      sampleRateHz: (json['sample_rate_hz'] as num?)?.toDouble() ?? 50.0,
+      sampleRateHz: _parseDoubleLooseWithDefault(json['sample_rate_hz'], 50.0),
     );
   }
 }
@@ -241,18 +278,17 @@ class DetectionResultModel {
     final reasonsJson = json['reasons'] as List<dynamic>? ?? const [];
     return DetectionResultModel(
       severity: json['severity'] as String? ?? 'low',
-      score: (json['score'] as num?)?.toDouble() ?? 0.0,
-      fallProbability: (json['fall_probability'] as num?)?.toDouble() ?? 0.0,
+      score: _parseDoubleLooseWithDefault(json['score']),
+      fallProbability: _parseDoubleLooseWithDefault(json['fall_probability']),
       predictedActivityClass: json['predicted_activity_class'] as String?,
-      frailtyProxyScore: (json['frailty_proxy_score'] as num?)?.toDouble(),
-      gaitStabilityScore: (json['gait_stability_score'] as num?)?.toDouble(),
-      movementDisorderScore: (json['movement_disorder_score'] as num?)
-          ?.toDouble(),
-      peakAccG: (json['peak_acc_g'] as num?)?.toDouble() ?? 0.0,
-      peakGyroDps: (json['peak_gyro_dps'] as num?)?.toDouble() ?? 0.0,
-      peakJerkGps: (json['peak_jerk_g_per_s'] as num?)?.toDouble() ?? 0.0,
-      stillnessRatio: (json['stillness_ratio'] as num?)?.toDouble() ?? 0.0,
-      samplesAnalyzed: json['samples_analyzed'] as int? ?? 0,
+      frailtyProxyScore: _parseDoubleLoose(json['frailty_proxy_score']),
+      gaitStabilityScore: _parseDoubleLoose(json['gait_stability_score']),
+      movementDisorderScore: _parseDoubleLoose(json['movement_disorder_score']),
+      peakAccG: _parseDoubleLooseWithDefault(json['peak_acc_g']),
+      peakGyroDps: _parseDoubleLooseWithDefault(json['peak_gyro_dps']),
+      peakJerkGps: _parseDoubleLooseWithDefault(json['peak_jerk_g_per_s']),
+      stillnessRatio: _parseDoubleLooseWithDefault(json['stillness_ratio']),
+      samplesAnalyzed: _parseIntLooseWithDefault(json['samples_analyzed']),
       message: json['message'] as String? ?? 'No message',
       reasons: reasonsJson.map((item) => item.toString()).toList(),
     );
@@ -290,14 +326,14 @@ class MotionInferenceResponseModel {
   factory MotionInferenceResponseModel.fromJson(Map<String, dynamic> json) {
     return MotionInferenceResponseModel(
       isFall: json['is_fall'] as bool? ?? false,
-      fallProbability: (json['fall_probability'] as num?)?.toDouble() ?? 0.0,
-      fallThreshold: (json['fall_threshold'] as num?)?.toDouble() ?? 0.5,
+      fallProbability: _parseDoubleLooseWithDefault(json['fall_probability']),
+      fallThreshold: _parseDoubleLooseWithDefault(json['fall_threshold'], 0.5),
       branch: json['branch'] as String? ?? 'unknown',
       activityLabel: json['activity_label'] as String?,
-      activityClassIndex: json['activity_class_index'] as int?,
+      activityClassIndex: _parseIntLoose(json['activity_class_index']),
       fallTypeCode: json['fall_type_code'] as String?,
       fallTypeLabel: json['fall_type_label'] as String?,
-      fallTypeClassIndex: json['fall_type_class_index'] as int?,
+      fallTypeClassIndex: _parseIntLoose(json['fall_type_class_index']),
       fallTypeSkippedReason: json['fall_type_skipped_reason'] as String?,
       schemaVersion: json['schema_version'] as String? ?? '1.0',
     );
@@ -361,8 +397,6 @@ class LiveStatusModel {
       latitude != null && longitude != null;
 
   factory LiveStatusModel.fromJson(Map<String, dynamic> json) {
-    final metricsJson =
-        json['latest_metrics'] as Map<String, dynamic>? ?? const {};
     final alertsJson = json['active_alert_ids'] as List<dynamic>? ?? const [];
     return LiveStatusModel(
       patientId: json['patient_id'] as String? ?? '',
@@ -370,20 +404,18 @@ class LiveStatusModel {
       sessionId: json['session_id'] as String?,
       deviceId: json['device_id'] as String?,
       severity: json['severity'] as String? ?? 'low',
-      score: (json['score'] as num?)?.toDouble() ?? 0.0,
-      fallProbability: (json['fall_probability'] as num?)?.toDouble() ?? 0.0,
+      score: _parseDoubleLooseWithDefault(json['score']),
+      fallProbability: _parseDoubleLooseWithDefault(json['fall_probability']),
       predictedActivityClass: json['predicted_activity_class'] as String?,
       lastMessage: json['last_message'] as String? ?? 'No live status yet.',
-      sampleRateHz: (json['sample_rate_hz'] as num?)?.toDouble(),
-      latestMetrics: metricsJson.map(
-        (key, value) => MapEntry(key, (value as num).toDouble()),
-      ),
+      sampleRateHz: _parseDoubleLoose(json['sample_rate_hz']),
+      latestMetrics: _parseMetricsMap(json['latest_metrics']),
       activeAlertIds: alertsJson.map((item) => item.toString()).toList(),
-      latitude: (json['latitude'] as num?)?.toDouble(),
-      longitude: (json['longitude'] as num?)?.toDouble(),
-      locationAccuracyM: (json['location_accuracy_m'] as num?)?.toDouble(),
+      latitude: _parseDoubleLoose(json['latitude']),
+      longitude: _parseDoubleLoose(json['longitude']),
+      locationAccuracyM: _parseDoubleLoose(json['location_accuracy_m']),
       locationUpdatedAt: DateTime.tryParse(json['location_updated_at'] as String? ?? ''),
-      headingDegrees: (json['heading_degrees'] as num?)?.toDouble(),
+      headingDegrees: _parseDoubleLoose(json['heading_degrees']),
     );
   }
 }
@@ -420,7 +452,7 @@ class AlertRecordModel {
       severity: json['severity'] as String? ?? 'low',
       status: json['status'] as String? ?? 'open',
       message: json['message'] as String? ?? 'Alert',
-      score: (json['score'] as num?)?.toDouble() ?? 0.0,
+      score: _parseDoubleLooseWithDefault(json['score']),
       createdAt: DateTime.tryParse(json['created_at'] as String? ?? ''),
       acknowledgedAt: DateTime.tryParse(json['acknowledged_at'] as String? ?? ''),
       resolvedAt: DateTime.tryParse(json['resolved_at'] as String? ?? ''),
@@ -444,9 +476,9 @@ class SystemSummaryModel {
 
   factory SystemSummaryModel.fromJson(Map<String, dynamic> json) {
     return SystemSummaryModel(
-      totalPatients: json['total_patients'] as int? ?? 0,
-      activeSessions: json['active_sessions'] as int? ?? 0,
-      openAlerts: json['open_alerts'] as int? ?? 0,
+      totalPatients: _parseIntLooseWithDefault(json['total_patients']),
+      activeSessions: _parseIntLooseWithDefault(json['active_sessions']),
+      openAlerts: _parseIntLooseWithDefault(json['open_alerts']),
       lastEventAt: DateTime.tryParse(json['last_event_at'] as String? ?? ''),
     );
   }
@@ -497,16 +529,16 @@ class SensorReadingPayload {
 
   factory SensorReadingPayload.fromJson(Map<String, dynamic> json) {
     return SensorReadingPayload(
-      timestampMs: json['timestamp_ms'] as int? ?? 0,
-      accX: (json['acc_x'] as num?)?.toDouble() ?? 0.0,
-      accY: (json['acc_y'] as num?)?.toDouble() ?? 0.0,
-      accZ: (json['acc_z'] as num?)?.toDouble() ?? 0.0,
-      gyroX: (json['gyro_x'] as num?)?.toDouble() ?? 0.0,
-      gyroY: (json['gyro_y'] as num?)?.toDouble() ?? 0.0,
-      gyroZ: (json['gyro_z'] as num?)?.toDouble() ?? 0.0,
-      azimuth: (json['azimuth'] as num?)?.toDouble(),
-      pitch: (json['pitch'] as num?)?.toDouble(),
-      roll: (json['roll'] as num?)?.toDouble(),
+      timestampMs: _parseIntLooseWithDefault(json['timestamp_ms']),
+      accX: _parseDoubleLooseWithDefault(json['acc_x']),
+      accY: _parseDoubleLooseWithDefault(json['acc_y']),
+      accZ: _parseDoubleLooseWithDefault(json['acc_z']),
+      gyroX: _parseDoubleLooseWithDefault(json['gyro_x']),
+      gyroY: _parseDoubleLooseWithDefault(json['gyro_y']),
+      gyroZ: _parseDoubleLooseWithDefault(json['gyro_z']),
+      azimuth: _parseDoubleLoose(json['azimuth']),
+      pitch: _parseDoubleLoose(json['pitch']),
+      roll: _parseDoubleLoose(json['roll']),
     );
   }
 
@@ -564,14 +596,14 @@ class TelemetrySnapshotModel {
       sessionId: json['session_id'] as String? ?? '',
       deviceId: json['device_id'] as String? ?? '',
       source: json['source'] as String? ?? 'mobile',
-      samplingRateHz: (json['sampling_rate_hz'] as num?)?.toDouble() ?? 0.0,
+      samplingRateHz: _parseDoubleLooseWithDefault(json['sampling_rate_hz']),
       accelerationUnit: json['acceleration_unit'] as String? ?? 'm_s2',
       gyroscopeUnit: json['gyroscope_unit'] as String? ?? 'rad_s',
-      batteryLevel: (json['battery_level'] as num?)?.toDouble(),
+      batteryLevel: _parseDoubleLoose(json['battery_level']),
       receivedAt:
           DateTime.tryParse(json['received_at'] as String? ?? '') ??
           DateTime.now(),
-      samplesInLastBatch: json['samples_in_last_batch'] as int? ?? 0,
+      samplesInLastBatch: _parseIntLooseWithDefault(json['samples_in_last_batch']),
       latestSamples: samples
           .map(
             (item) =>
@@ -599,7 +631,7 @@ class IngestResponseModel {
 
   factory IngestResponseModel.fromJson(Map<String, dynamic> json) {
     return IngestResponseModel(
-      ingestedSamples: json['ingested_samples'] as int? ?? 0,
+      ingestedSamples: _parseIntLooseWithDefault(json['ingested_samples']),
       detection: DetectionResultModel.fromJson(
         json['detection'] as Map<String, dynamic>? ?? const {},
       ),
@@ -659,7 +691,7 @@ class CaregiverAssignedPatientModel {
     return CaregiverAssignedPatientModel(
       id: json['id'] as String? ?? '',
       fullName: json['full_name'] as String? ?? 'Patient',
-      age: json['age'] as int?,
+      age: _parseIntLoose(json['age']),
     );
   }
 }
