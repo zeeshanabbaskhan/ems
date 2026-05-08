@@ -96,6 +96,28 @@ def _humanize_activity_label(raw_label: Any) -> str | None:
     return _ADL_CODE_TO_NAME.get(code, code)
 
 
+def _is_alarm_eligible_alert(
+    *,
+    severity: str | None,
+    message: str | None,
+    status: str | None = None,
+) -> bool:
+    """Single source of truth for caregiver alarm eligibility."""
+    if (status or "").strip().lower() == "resolved":
+        return False
+    if (severity or "").strip().lower() != "fall_detected":
+        return False
+    msg = (message or "").strip().lower()
+    if (
+        "did not confirm" in msg
+        or "no elder response" in msg
+        or ("no elder" in msg and "response" in msg)
+        or "emergency: elder" in msg
+    ):
+        return False
+    return True
+
+
 def _heuristic_fall_probability(samples_dict: list[dict[str, Any]]) -> float:
     """Accelerometer-magnitude fallback when ML stack is unavailable or ``run_inference`` fails."""
     mags: list[float] = []
@@ -900,6 +922,11 @@ def ingest_live(body: IngestLiveBody):
                 "score": float(detection["score"]),
                 "created_at": iso_now(),
                 "manually_triggered": False,
+                "alarm_eligible": _is_alarm_eligible_alert(
+                    severity="fall_detected",
+                    message=detection["message"],
+                    status="open",
+                ),
             }
 
             c.execute(
@@ -1027,6 +1054,11 @@ def manual_alert(
         "score": 1.0,
         "created_at": created,
         "manually_triggered": True,
+        "alarm_eligible": _is_alarm_eligible_alert(
+            severity=body.severity,
+            message=body.message,
+            status="open",
+        ),
     }
     cg = _caregiver_id_for_patient(body.patient_id)
     background_tasks.add_task(_broadcast_alert_ws, cg, payload)
@@ -1081,6 +1113,11 @@ def list_alerts(
                 "acknowledged_at": row["acknowledged_at"],
                 "resolved_at": row["resolved_at"],
                 "manually_triggered": bool(row["manually_triggered"]),
+                "alarm_eligible": _is_alarm_eligible_alert(
+                    severity=row["severity"],
+                    message=row["message"],
+                    status=row["status"],
+                ),
             }
         )
     return out
@@ -1110,6 +1147,11 @@ def ack_alert(alert_id: str, body: AckBody):
         "acknowledged_at": row["acknowledged_at"],
         "resolved_at": row["resolved_at"],
         "manually_triggered": bool(row["manually_triggered"]),
+        "alarm_eligible": _is_alarm_eligible_alert(
+            severity=row["severity"],
+            message=row["message"],
+            status=row["status"],
+        ),
     }
 
 
@@ -1137,6 +1179,11 @@ def resolve_alert(alert_id: str, body: AckBody):
         "acknowledged_at": row["acknowledged_at"],
         "resolved_at": row["resolved_at"],
         "manually_triggered": bool(row["manually_triggered"]),
+        "alarm_eligible": _is_alarm_eligible_alert(
+            severity=row["severity"],
+            message=row["message"],
+            status=row["status"],
+        ),
     }
 
 

@@ -68,6 +68,7 @@ class MonitoringController extends ChangeNotifier {
   static const String _caregiverNameKey = 'caregiver_name';
   static const String _caregiverEmailAuthKey = 'caregiver_email_auth';
   static const String _elderAccessTokenKey = 'elder_access_token';
+  static const String _credentialHistoryKeyPrefix = 'credential_history_v1_';
 
   final BackendApiClient _apiClient;
   final SensorStreamingService _sensorService;
@@ -341,6 +342,7 @@ class MonitoringController extends ChangeNotifier {
       await _clearElderAuth();
       _clearCaregiverDashboardCache();
       await _persistCaregiverAuth();
+      await _restoreCredentialHistoryForCurrentCaregiver();
       _apiClient.setBearerToken(_caregiverToken);
       _statusMessage = 'Caregiver account ready.';
       unawaited(refreshCaregiverData(silent: true));
@@ -373,6 +375,7 @@ class MonitoringController extends ChangeNotifier {
       await _clearElderAuth();
       _clearCaregiverDashboardCache();
       await _persistCaregiverAuth();
+      await _restoreCredentialHistoryForCurrentCaregiver();
       _apiClient.setBearerToken(_caregiverToken);
       _statusMessage = 'Welcome back $_caregiverName.';
       unawaited(refreshCaregiverData(silent: true));
@@ -431,6 +434,7 @@ class MonitoringController extends ChangeNotifier {
     try {
       await _apiClient.deleteCaregiverPatient(patientId.trim());
       _credentialHistory.removeWhere((c) => c.patientId == patientId.trim());
+      await _persistCredentialHistoryForCurrentCaregiver();
       await refreshCaregiverData(silent: true);
       _statusMessage = 'Patient removed. You can enroll someone new.';
     } catch (error) {
@@ -531,6 +535,7 @@ class MonitoringController extends ChangeNotifier {
       while (_credentialHistory.length > 1) {
         _credentialHistory.removeAt(0);
       }
+      await _persistCredentialHistoryForCurrentCaregiver();
 
       if (_patientName.trim().isEmpty) {
         _patientName = created.patientName;
@@ -1521,8 +1526,8 @@ class MonitoringController extends ChangeNotifier {
   }
 
   bool _isAlarmEligibleAlert(AlertRecordModel alert) {
-    // Alarm should be strict: only confirmed fall detections, not high-risk drift.
-    return alert.status != 'resolved' && alert.severity == 'fall_detected';
+    // Strict mode: alarm rings only when backend explicitly says so.
+    return alert.alarmEligible == true;
   }
 
   void _syncAlarmWithAlerts() {
@@ -1677,6 +1682,62 @@ class MonitoringController extends ChangeNotifier {
     _credentialHistory.clear();
     _activeAlert = null;
     _liveStatus = null;
+  }
+
+  String _credentialHistoryStorageKey(String email) {
+    final normalized = email.trim().toLowerCase();
+    final safe = normalized.replaceAll(RegExp(r'[^a-z0-9_.@-]'), '_');
+    return '$_credentialHistoryKeyPrefix$safe';
+  }
+
+  Future<void> _persistCredentialHistoryForCurrentCaregiver() async {
+    final email = _caregiverAuthEmail.trim();
+    if (email.isEmpty) {
+      return;
+    }
+    final preferences = _preferences ?? await SharedPreferences.getInstance();
+    _preferences = preferences;
+    final key = _credentialHistoryStorageKey(email);
+    final payload = _credentialHistory
+        .map(
+          (c) => <String, dynamic>{
+            'patient_id': c.patientId,
+            'patient_name': c.patientName,
+            'home_address': c.homeAddress,
+            'username': c.username,
+            'temporary_password': c.temporaryPassword,
+          },
+        )
+        .toList();
+    await preferences.setString(key, jsonEncode(payload));
+  }
+
+  Future<void> _restoreCredentialHistoryForCurrentCaregiver() async {
+    final email = _caregiverAuthEmail.trim();
+    if (email.isEmpty) {
+      return;
+    }
+    final preferences = _preferences ?? await SharedPreferences.getInstance();
+    _preferences = preferences;
+    final raw = preferences.getString(_credentialHistoryStorageKey(email));
+    _credentialHistory.clear();
+    if (raw == null || raw.trim().isEmpty) {
+      return;
+    }
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return;
+      }
+      for (final item in decoded) {
+        if (item is! Map<String, dynamic>) {
+          continue;
+        }
+        _credentialHistory.add(GeneratedPatientCredentialModel.fromJson(item));
+      }
+    } catch (_) {
+      // Ignore broken cache; caregiver can regenerate credentials if needed.
+    }
   }
 
   void _applyCaregiverScopeGuards() {

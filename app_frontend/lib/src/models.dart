@@ -30,6 +30,18 @@ double? _parseDoubleLoose(dynamic v) {
 double _parseDoubleLooseWithDefault(dynamic v, [double fallback = 0.0]) =>
     _parseDoubleLoose(v) ?? fallback;
 
+bool? _parseBoolLoose(dynamic v) {
+  if (v == null) return null;
+  if (v is bool) return v;
+  if (v is num) return v != 0;
+  if (v is String) {
+    final s = v.trim().toLowerCase();
+    if (s == 'true' || s == '1' || s == 'yes') return true;
+    if (s == 'false' || s == '0' || s == 'no') return false;
+  }
+  return null;
+}
+
 const Map<String, String> _adlCodeToName = <String, String>{
   'STD': 'Standing',
   'WAL': 'Walking',
@@ -514,6 +526,7 @@ class AlertRecordModel {
     this.acknowledgedAt,
     this.resolvedAt,
     this.manuallyTriggered = false,
+    this.alarmEligible,
   });
 
   final String id;
@@ -526,6 +539,7 @@ class AlertRecordModel {
   final DateTime? acknowledgedAt;
   final DateTime? resolvedAt;
   final bool manuallyTriggered;
+  final bool? alarmEligible;
 
   factory AlertRecordModel.fromJson(Map<String, dynamic> json) {
     return AlertRecordModel(
@@ -539,6 +553,7 @@ class AlertRecordModel {
       acknowledgedAt: DateTime.tryParse(json['acknowledged_at'] as String? ?? ''),
       resolvedAt: DateTime.tryParse(json['resolved_at'] as String? ?? ''),
       manuallyTriggered: json['manually_triggered'] as bool? ?? false,
+      alarmEligible: _parseBoolLoose(json['alarm_eligible']),
     );
   }
 }
