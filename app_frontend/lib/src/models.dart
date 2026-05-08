@@ -103,16 +103,21 @@ String? _simplifyActivityLabel(String? label) {
   if (t.isEmpty) return null;
   final lower = t.toLowerCase();
 
+  // Keep core ADL classes stable and avoid over-merging transitions.
   if (lower.contains('jog') || lower.contains('run')) return 'Running';
-  if (lower.contains('walk') ||
-      lower.contains('stairs') ||
-      lower.contains('car step')) {
-    return 'Walking';
-  }
-  if (lower.contains('sit') && lower.contains('stand')) return 'Standing';
+  if (lower.contains('walking')) return 'Walking';
   if (lower.contains('sitting')) return 'Sitting';
-  if (lower.contains('lying')) return 'Lying';
   if (lower.contains('standing')) return 'Standing';
+  if (lower.contains('lying')) return 'Lying';
+
+  // Group uncommon navigation variants into walking.
+  if (lower.contains('stairs') || lower.contains('car step')) return 'Walking';
+
+  // Transitional postures are valid ADLs; don't force them into standing.
+  if (lower.contains('sit to stand') || lower.contains('stand to sit')) {
+    return 'Transition';
+  }
+
   if (lower.contains('jump')) return 'Active movement';
 
   return t;

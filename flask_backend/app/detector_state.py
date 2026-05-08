@@ -14,6 +14,11 @@ MEDIUM = {
     "fall_score": 0.80,
 }
 
+# Guardrail against false alarms from tiny handset motion.
+# A "true" fall should usually show at least one noticeable impact/rotation cue.
+FALL_MIN_PEAK_ACC_G = 1.35
+FALL_MIN_PEAK_GYRO_DPS = 120.0
+
 
 def _severity_from_fall_prob(p: float, thr: float) -> str:
     if p >= thr:
@@ -72,6 +77,14 @@ def build_detection_payload(
 ) -> dict[str, Any]:
     sig = simple_signal_metrics(samples)
     severity = _severity_from_fall_prob(fall_probability, threshold)
+    if severity == "fall_detected":
+        has_impact_evidence = (
+            sig["peak_acc_g"] >= FALL_MIN_PEAK_ACC_G
+            or sig["peak_gyro_dps"] >= FALL_MIN_PEAK_GYRO_DPS
+        )
+        if not has_impact_evidence:
+            # Keep elevated risk visible, but suppress hard fall alert.
+            severity = "high_risk"
     score = max(fall_probability, sig["peak_acc_g"] / 5.0 * 0.3 + fall_probability * 0.7)
     reasons = []
     if ml_ok:
@@ -80,6 +93,12 @@ def build_detection_payload(
         reasons.append("heuristic_fallback")
     if sig["peak_acc_g"] > 2.5:
         reasons.append("high_peak_acceleration")
+    if (
+        fall_probability >= threshold
+        and sig["peak_acc_g"] < FALL_MIN_PEAK_ACC_G
+        and sig["peak_gyro_dps"] < FALL_MIN_PEAK_GYRO_DPS
+    ):
+        reasons.append("fall_suppressed_low_impact_motion")
     msg = (
         f"Fall risk {fall_probability:.2f} ({severity}). "
         + (f"Activity hint: {inferred_activity}" if inferred_activity else "")
