@@ -10,7 +10,7 @@ class MotionInferenceRequest(BaseModel):
 
     enhanced_features: list[float] = Field(
         ...,
-        description="Length = inference_manifest enhanced_feature_dim (116 after train_mobiact_baselines).",
+        description="Length = inference_manifest enhanced_feature_dim (128 after retraining with MobiAct feature set).",
     )
     fall_type_features: list[float] | None = Field(
         default=None,

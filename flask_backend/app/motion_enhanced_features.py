@@ -1,4 +1,4 @@
-"""116-D multi-sensor features for live ingest — aligned with ``scripts/baseline_fall/enhanced_features.py``.
+"""128-D multi-sensor features for live ingest — aligned with ``scripts/baseline_fall/enhanced_features.py``.
 
 Shipped inside ``flask_backend`` so Docker/production images do not depend on ``scripts/`` on ``PYTHONPATH``.
 Training code continues to use ``scripts/baseline_fall/enhanced_features.py``; keep outputs numerically in sync when changing either copy.
@@ -7,11 +7,8 @@ Training code continues to use ``scripts/baseline_fall/enhanced_features.py``; k
 from __future__ import annotations
 
 import numpy as np
-from scipy.fft import fft
-from scipy.signal import find_peaks
-from scipy.stats import kurtosis, skew
 
-ENHANCED_FEATURE_DIM = 116
+ENHANCED_FEATURE_DIM = 128
 
 
 def extract_enhanced_features(
@@ -28,117 +25,94 @@ def extract_enhanced_features(
     features: list[list[float]] = []
 
     for idx in range(n):
-        window = acc_windows[idx]
+        acc = np.asarray(acc_windows[idx], dtype=np.float64)
+        gyro = np.asarray(gyro_windows[idx], dtype=np.float64)
+        ori = np.asarray(ori_windows[idx], dtype=np.float64)
         feat: list[float] = []
 
-        for axis in range(3):
-            data = window[:, axis]
-            feat.extend(
-                [
-                    float(np.mean(data)),
-                    float(np.std(data)),
-                    float(np.median(data)),
-                    float(np.min(data)),
-                    float(np.max(data)),
-                    float(np.ptp(data)),
-                    float(np.percentile(data, 5)),
-                    float(np.percentile(data, 25)),
-                    float(np.percentile(data, 75)),
-                    float(np.percentile(data, 95)),
-                    float(np.sqrt(np.mean(data**2))),
-                    float(np.mean(np.abs(np.diff(data)))),
-                    float(np.sum(np.abs(np.diff(data)))),
-                    float(skew(data)),
-                    float(kurtosis(data)),
-                    float(np.var(data)),
-                    float(np.sum(data**2) / len(data)),
-                    float(np.max(np.abs(data))),
-                    float(np.argmax(np.abs(data)) / len(data)),
-                ]
-            )
+        feat.extend(_time_domain_features(acc))
+        feat.extend(_cross_axis_correlations(acc))
+        feat.extend(_magnitude_features(acc))
+        feat.extend(_frequency_domain_features(acc))
 
-            fft_vals = np.abs(fft(data))[: len(data) // 2]
-            if len(fft_vals) > 0:
-                s = float(np.sum(fft_vals) + 1e-6)
-                feat.extend(
-                    [
-                        float(np.mean(fft_vals)),
-                        float(np.std(fft_vals)),
-                        float(np.max(fft_vals)),
-                        float(s),
-                        float(np.argmax(fft_vals) / len(fft_vals)),
-                        float(np.sum(fft_vals[:10]) / s),
-                    ]
-                )
-            else:
-                feat.extend([0.0] * 6)
+        feat.extend(_time_domain_features(gyro))
+        feat.extend(_cross_axis_correlations(gyro))
+        feat.extend(_magnitude_features(gyro))
+        feat.extend(_frequency_domain_features(gyro))
 
-            if len(data) > 1:
-                zc = np.sum(np.diff(np.sign(data)) != 0)
-                feat.append(float(zc / len(data)))
-            else:
-                feat.append(0.0)
-
-        gyro = gyro_windows[idx]
-        if np.any(gyro != 0):
-            for axis in range(3):
-                data = gyro[:, axis]
-                feat.extend(
-                    [
-                        float(np.mean(data)),
-                        float(np.std(data)),
-                        float(np.max(np.abs(data))),
-                        float(np.sum(np.abs(data))),
-                        float(np.sum(data**2) / len(data)),
-                    ]
-                )
-        else:
-            feat.extend([0.0] * 15)
-
-        ori = ori_windows[idx]
-        if np.any(ori != 0):
-            for axis in range(3):
-                data = ori[:, axis]
-                feat.extend(
-                    [
-                        float(np.mean(data)),
-                        float(np.std(data)),
-                        float(data[-1] - data[0]),
-                    ]
-                )
-        else:
-            feat.extend([0.0] * 9)
-
-        for i_idx, j_idx in [(0, 1), (0, 2), (1, 2)]:
-            c = np.corrcoef(window[:, i_idx], window[:, j_idx])[0, 1]
-            feat.append(float(c) if not np.isnan(c) else 0.0)
-
-        magnitude = np.sqrt(np.sum(window**2, axis=1))
-        feat.extend(
-            [
-                float(np.mean(magnitude)),
-                float(np.std(magnitude)),
-                float(np.max(magnitude)),
-                float(np.percentile(magnitude, 95)),
-                float(np.argmax(magnitude) / len(magnitude)),
-                float(np.sum(magnitude)),
-                float(np.mean(np.diff(magnitude))),
-            ]
-        )
-
-        if len(magnitude) > 10:
-            peaks, _ = find_peaks(magnitude, height=np.std(magnitude), distance=5)
-            feat.extend(
-                [
-                    float(len(peaks)),
-                    float(np.max(magnitude[peaks])) if len(peaks) > 0 else 0.0,
-                    float(np.mean(magnitude[peaks])) if len(peaks) > 0 else 0.0,
-                    float(peaks[0] / len(magnitude)) if len(peaks) > 0 else 0.0,
-                ]
-            )
-        else:
-            feat.extend([0.0] * 4)
+        feat.extend(_orientation_stats(ori))
 
         features.append(feat)
 
     return np.asarray(features, dtype=np.float64)
+
+
+def _time_domain_features(data: np.ndarray) -> list[float]:
+    out: list[float] = []
+    for axis in range(data.shape[1]):
+        x = data[:, axis]
+        out.extend(
+            [
+                float(np.mean(x)),
+                float(np.std(x)),
+                float(np.median(x)),
+                float(np.min(x)),
+                float(np.max(x)),
+                float(np.ptp(x)),
+                float(np.percentile(x, 5)),
+                float(np.percentile(x, 25)),
+                float(np.percentile(x, 75)),
+                float(np.percentile(x, 95)),
+                float(np.sqrt(np.mean(x**2))),
+                float(np.mean(np.abs(np.diff(x)))),
+                float(np.sum(np.abs(np.diff(x)))),
+                float(np.var(x)),
+                float(np.sum(x**2) / len(x)),
+            ]
+        )
+    return out
+
+
+def _cross_axis_correlations(data: np.ndarray) -> list[float]:
+    out: list[float] = []
+    for i_idx, j_idx in [(0, 1), (0, 2), (1, 2)]:
+        c = float(np.corrcoef(data[:, i_idx], data[:, j_idx])[0, 1])
+        out.append(0.0 if np.isnan(c) else c)
+    return out
+
+
+def _magnitude_features(data: np.ndarray) -> list[float]:
+    mag = np.sqrt(np.sum(data**2, axis=1))
+    return [
+        float(np.mean(mag)),
+        float(np.std(mag)),
+        float(np.max(mag)),
+        float(np.percentile(mag, 95)),
+        float(np.sum(mag)),
+    ]
+
+
+def _frequency_domain_features(data: np.ndarray, fs: float = 50.0) -> list[float]:
+    out: list[float] = []
+    freqs = np.fft.rfftfreq(data.shape[0], d=1.0 / fs)
+    for axis in range(data.shape[1]):
+        fft_mag = np.abs(np.fft.rfft(data[:, axis]))
+        if fft_mag.size <= 1:
+            out.extend([0.0, 0.0])
+            continue
+        dom_idx = int(np.argmax(fft_mag[1:]) + 1)
+        dom_freq = float(freqs[dom_idx])
+        spectral_energy = float(np.sum(fft_mag**2) / len(fft_mag))
+        out.extend([dom_freq, spectral_energy])
+    return out
+
+
+def _orientation_stats(data: np.ndarray) -> list[float]:
+    out: list[float] = []
+    for axis in range(data.shape[1]):
+        x = data[:, axis]
+        out.extend([float(np.mean(x)), float(np.std(x)), float(np.ptp(x))])
+    azimuth_rad = np.deg2rad(data[:, 0])
+    mrl = float(np.sqrt(np.mean(np.cos(azimuth_rad)) ** 2 + np.mean(np.sin(azimuth_rad)) ** 2))
+    out.append(mrl)
+    return out

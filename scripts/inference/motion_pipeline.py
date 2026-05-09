@@ -42,8 +42,8 @@ def _fall_type_vector_from_windows(
 @dataclass(frozen=True)
 class InferenceArtifacts:
     manifest: dict[str, Any]
-    fall_model: Any
-    fall_scaler: Any
+    fall_model: Any | None
+    fall_scaler: Any | None
     adl_model: Any
     adl_scaler: Any
     adl_encoder: Any
@@ -54,6 +54,8 @@ class InferenceArtifacts:
     enhanced_dim: int
     fall_type_dim: int
     fall_threshold: float
+    fall_binary_enabled: bool
+    fall_binary_issue: str | None
 
 
 def load_artifacts(manifest_path: Path, models_dir: Path) -> InferenceArtifacts:
@@ -73,8 +75,6 @@ def load_artifacts(manifest_path: Path, models_dir: Path) -> InferenceArtifacts:
             raise FileNotFoundError(str(out))
         return out
 
-    fall_model = joblib.load(p(art["fall_binary"]["model_path"]))
-    fall_scaler = joblib.load(p(art["fall_binary"]["scaler_path"]))
     adl_model = joblib.load(p(art["adl"]["model_path"]))
     adl_scaler = joblib.load(p(art["adl"]["scaler_path"]))
     adl_encoder = joblib.load(p(art["adl"]["label_encoder_path"]))
@@ -84,15 +84,29 @@ def load_artifacts(manifest_path: Path, models_dir: Path) -> InferenceArtifacts:
     fall_type_indices = np.asarray(joblib.load(p(art["fall_type"]["feature_indices_path"])), dtype=int)
     fall_type_encoder = joblib.load(p(art["fall_type"]["label_encoder_path"]))
 
-    nf = getattr(fall_scaler, "n_features_in_", None)
-    if nf is not None and int(nf) != enhanced_dim:
-        raise ValueError(f"Fall scaler wants {nf}, manifest {enhanced_dim}")
     na = getattr(adl_scaler, "n_features_in_", None)
     if na is not None and int(na) != enhanced_dim:
         raise ValueError(f"ADL scaler wants {na}, manifest {enhanced_dim}")
     ft_n = getattr(fall_type_scaler, "n_features_in_", None)
     if ft_n is not None and int(ft_n) != fall_type_dim:
         raise ValueError(f"Fall-type scaler wants {ft_n}, manifest {fall_type_dim}")
+
+    fall_model: Any | None = None
+    fall_scaler: Any | None = None
+    fall_binary_enabled = True
+    fall_binary_issue: str | None = None
+    try:
+        fall_model = joblib.load(p(art["fall_binary"]["model_path"]))
+        fall_scaler = joblib.load(p(art["fall_binary"]["scaler_path"]))
+        nf = getattr(fall_scaler, "n_features_in_", None)
+        if nf is not None and int(nf) != enhanced_dim:
+            fall_binary_enabled = False
+            fall_binary_issue = f"fall_scaler_dim_mismatch:{nf}!=manifest:{enhanced_dim}"
+            fall_model = None
+            fall_scaler = None
+    except Exception as exc:
+        fall_binary_enabled = False
+        fall_binary_issue = f"fall_binary_unavailable:{exc}"
 
     return InferenceArtifacts(
         manifest=manifest,
@@ -108,6 +122,8 @@ def load_artifacts(manifest_path: Path, models_dir: Path) -> InferenceArtifacts:
         enhanced_dim=enhanced_dim,
         fall_type_dim=fall_type_dim,
         fall_threshold=threshold,
+        fall_binary_enabled=fall_binary_enabled,
+        fall_binary_issue=fall_binary_issue,
     )
 
 
@@ -129,6 +145,24 @@ def run_inference(
         ft_chk = np.asarray(fall_type_features, dtype=np.float64).reshape(1, -1)
         if ft_chk.shape[1] != art.fall_type_dim:
             raise ValueError(f"fall_type_features length {ft_chk.shape[1]} != {art.fall_type_dim}")
+
+    if not art.fall_binary_enabled or art.fall_model is None or art.fall_scaler is None:
+        xa = art.adl_scaler.transform(x)
+        cid = int(art.adl_model.predict(xa)[0])
+        label = str(art.adl_encoder.inverse_transform(np.array([cid]))[0])
+        return {
+            "is_fall": False,
+            "fall_probability": 0.0,
+            "fall_threshold": art.fall_threshold,
+            "schema_version": str(art.manifest.get("schema_version", "1.0")),
+            "branch": "adl",
+            "activity_class_index": cid,
+            "activity_label": label,
+            "fall_type_code": None,
+            "fall_type_label": None,
+            "fall_type_class_index": None,
+            "fall_type_skipped_reason": art.fall_binary_issue or "fall_binary_disabled",
+        }
 
     xf = art.fall_scaler.transform(x)
     p_fall = float(art.fall_model.predict_proba(xf)[0, 1])

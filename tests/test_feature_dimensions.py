@@ -17,8 +17,9 @@ def test_deployed_enhanced_dim_matches_manifest(repo_root: Path, inference_manif
     """Fall + ADL inference scalers must agree with manifest (same vector for both tasks)."""
     model_dir = repo_root / "flask_backend" / "models"
     d = int(inference_manifest["enhanced_feature_dim"])
-    fall_p = model_dir / "baseline_fall" / "scaler_fall.pkl"
-    adl_p = model_dir / "baseline_adl" / "scaler_adl.pkl"
+    art = inference_manifest["artifacts"]
+    fall_p = model_dir / art["fall_binary"]["scaler_path"]
+    adl_p = model_dir / art["adl"]["scaler_path"]
     if not fall_p.is_file() or not adl_p.is_file():
         pytest.skip("baseline fall/adl scalers not present (run train_mobiact_baselines.py)")
     sf = joblib.load(fall_p)
@@ -29,14 +30,14 @@ def test_deployed_enhanced_dim_matches_manifest(repo_root: Path, inference_manif
     assert na == d, f"ADL scaler wants {na}, manifest says {d}"
 
 
-def test_baseline_fall_extractor_is_116_dim() -> None:
-    """Reference enhanced extractor (training notebook with full fusion) yields 116-D per window."""
+def test_baseline_fall_extractor_is_128_dim() -> None:
+    """Reference enhanced extractor (training notebook with full fusion) yields 128-D per window."""
     rng = np.random.default_rng(42)
     acc = rng.standard_normal((1, 300, 3))
     gyro = rng.standard_normal((1, 300, 3))
     ori = rng.standard_normal((1, 300, 3))
     X = extract_enhanced_features(acc, gyro, ori)
-    assert X.shape == (1, 116)
+    assert X.shape == (1, 128)
 
 
 def test_fall_type_manifest_matches_saved_scaler(repo_root: Path, inference_manifest: dict) -> None:

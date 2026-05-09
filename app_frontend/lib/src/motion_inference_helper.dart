@@ -2,7 +2,7 @@ import 'api_client.dart';
 import 'models.dart';
 import 'motion_feature_extractor.dart';
 
-/// Validates window size against backend manifest, extracts **116-D** features, calls inference.
+/// Validates window size against backend manifest, extracts **128-D** features, calls inference.
 class MotionInferenceHelper {
   MotionInferenceHelper._();
 

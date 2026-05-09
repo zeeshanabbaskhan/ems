@@ -2,16 +2,18 @@ import 'dart:math' as math;
 
 import 'models.dart';
 
-/// Colab / Python `scripts/baseline_fall/enhanced_features.py` — **116** floats per window.
+/// Colab / Python `scripts/baseline_fall/enhanced_features.py` — **128** floats per window.
 class MotionFeatureExtractor {
   MotionFeatureExtractor._();
 
-  /// Must match training (300 samples @ ~50 Hz).
-  static const int windowLength = 300;
-  static const int enhancedFeatureDim = 116;
+  /// Must match training script window size (128 samples @ ~50 Hz).
+  static const int windowLength = 128;
+  static const int fallTypeWindowLength = 300;
+  static const int enhancedFeatureDim = 128;
+  static const double sampleRateHz = 50.0;
 
-  /// Build **116** features from one window of sensor readings.
-  /// If [samples] has length ≠ 300, values are linearly resampled to 300 per axis.
+  /// Build **128** features from one window of sensor readings.
+  /// If [samples] has length ≠ 128, values are linearly resampled to 128 per axis.
   static List<double> extractEnhanced(List<SensorReadingPayload> samples) {
     if (samples.length < 2) {
       throw ArgumentError('Need at least 2 samples to form a window.');
@@ -45,40 +47,17 @@ class MotionFeatureExtractor {
 
     final feat = <double>[];
 
-    for (var axis = 0; axis < 3; axis++) {
-      final data = acc[axis];
-      feat.addAll(_accAxisTimeFreq(data));
-    }
+    feat.addAll(_timeDomainFeatures(acc));
+    feat.addAll(_crossAxisCorrelations(acc));
+    feat.addAll(_magnitudeFeatures(acc));
+    feat.addAll(_frequencyDomainFeatures(acc, sampleRateHz));
 
-    if (_anyNonZero(gyro[0]) || _anyNonZero(gyro[1]) || _anyNonZero(gyro[2])) {
-      for (var axis = 0; axis < 3; axis++) {
-        final data = gyro[axis];
-        feat.addAll(_gyroStats(data));
-      }
-    } else {
-      feat.addAll(List<double>.filled(15, 0.0));
-    }
+    feat.addAll(_timeDomainFeatures(gyro));
+    feat.addAll(_crossAxisCorrelations(gyro));
+    feat.addAll(_magnitudeFeatures(gyro));
+    feat.addAll(_frequencyDomainFeatures(gyro, sampleRateHz));
 
-    if (_anyNonZero(ori[0]) || _anyNonZero(ori[1]) || _anyNonZero(ori[2])) {
-      for (var axis = 0; axis < 3; axis++) {
-        final data = ori[axis];
-        final d0 = data[0];
-        final d1 = data[data.length - 1];
-        feat.addAll([_mean(data), _std(data), d1 - d0]);
-      }
-    } else {
-      feat.addAll(List<double>.filled(9, 0.0));
-    }
-
-    feat.add(_corr(acc[0], acc[1]));
-    feat.add(_corr(acc[0], acc[2]));
-    feat.add(_corr(acc[1], acc[2]));
-
-    final mag = List<double>.generate(
-      windowLength,
-      (i) => math.sqrt(acc[0][i] * acc[0][i] + acc[1][i] * acc[1][i] + acc[2][i] * acc[2][i]),
-    );
-    feat.addAll(_magnitudeBlock(mag));
+    feat.addAll(_orientationStats(ori));
 
     if (feat.length != enhancedFeatureDim) {
       throw StateError('Feature length ${feat.length} != $enhancedFeatureDim');
@@ -88,15 +67,15 @@ class MotionFeatureExtractor {
 
   /// **300×3** rows for `POST /api/v1/inference/motion` `acc_window` / `gyro_window` (server fall-type path).
   static List<List<double>> accMatrix300(List<SensorReadingPayload> samples) =>
-      _sensorMatrix300(samples, _accTriplets);
+      _sensorMatrix(samples, _accTriplets, fallTypeWindowLength);
 
   /// Gyro columns for the same API (rad/s).
   static List<List<double>> gyroMatrix300(List<SensorReadingPayload> samples) =>
-      _sensorMatrix300(samples, _gyroTriplets);
+      _sensorMatrix(samples, _gyroTriplets, fallTypeWindowLength);
 
   /// Orientation columns (degrees, MobiAct azimuth / pitch / roll) for fall-type server features.
   static List<List<double>> oriMatrix300(List<SensorReadingPayload> samples) =>
-      _sensorMatrix300(samples, _oriTriplets);
+      _sensorMatrix(samples, _oriTriplets, fallTypeWindowLength);
 
   static List<double> _accTriplets(SensorReadingPayload s) =>
       <double>[s.accX, s.accY, s.accZ];
@@ -107,9 +86,10 @@ class MotionFeatureExtractor {
   static List<double> _oriTriplets(SensorReadingPayload s) =>
       <double>[s.azimuth ?? 0.0, s.pitch ?? 0.0, s.roll ?? 0.0];
 
-  static List<List<double>> _sensorMatrix300(
+  static List<List<double>> _sensorMatrix(
     List<SensorReadingPayload> samples,
     List<double> Function(SensorReadingPayload) trip,
+    int targetLength,
   ) {
     if (samples.length < 2) {
       throw ArgumentError('Need at least 2 samples to form a window.');
@@ -118,11 +98,11 @@ class MotionFeatureExtractor {
     final c0 = List<double>.generate(n, (i) => trip(samples[i])[0]);
     final c1 = List<double>.generate(n, (i) => trip(samples[i])[1]);
     final c2 = List<double>.generate(n, (i) => trip(samples[i])[2]);
-    final r0 = n == windowLength ? c0 : _resampleSeries(c0, windowLength);
-    final r1 = n == windowLength ? c1 : _resampleSeries(c1, windowLength);
-    final r2 = n == windowLength ? c2 : _resampleSeries(c2, windowLength);
+    final r0 = n == targetLength ? c0 : _resampleSeries(c0, targetLength);
+    final r1 = n == targetLength ? c1 : _resampleSeries(c1, targetLength);
+    final r2 = n == targetLength ? c2 : _resampleSeries(c2, targetLength);
     return List<List<double>>.generate(
-      windowLength,
+      targetLength,
       (i) => <double>[r0[i], r1[i], r2[i]],
     );
   }
@@ -141,155 +121,105 @@ class MotionFeatureExtractor {
     return out;
   }
 
-  static bool _anyNonZero(List<double> v) {
-    for (final x in v) {
-      if (x != 0.0) return true;
-    }
-    return false;
-  }
-
-  static List<double> _accAxisTimeFreq(List<double> data) {
+  static List<double> _timeDomainFeatures(List<List<double>> data) {
     final out = <double>[];
-    out.addAll([
-      _mean(data),
-      _std(data),
-      _median(data),
-      data.reduce(math.min),
-      data.reduce(math.max),
-      _ptp(data),
-      _percentile(data, 5),
-      _percentile(data, 25),
-      _percentile(data, 75),
-      _percentile(data, 95),
-      math.sqrt(data.map((e) => e * e).reduce((a, b) => a + b) / data.length),
-      _meanAbsDiff(data),
-      _sumAbsDiff(data),
-      _skew(data),
-      _kurtosisExcess(data),
-      _variance(data),
-      data.map((e) => e * e).reduce((a, b) => a + b) / data.length,
-      data.map((e) => e.abs()).reduce(math.max),
-      _argmaxAbs(data) / data.length,
-    ]);
-
-    final half = _rfftMagnitudes(data);
-    if (half.isEmpty) {
-      out.addAll(List<double>.filled(6, 0.0));
-    } else {
-      final s = half.fold<double>(0.0, (a, b) => a + b) + 1e-6;
-      final low = half.length >= 10 ? half.sublist(0, 10).fold<double>(0.0, (a, b) => a + b) : s;
+    for (var axis = 0; axis < data.length; axis++) {
+      final x = data[axis];
       out.addAll([
-        _mean(half),
-        _std(half),
-        half.reduce(math.max),
-        s,
-        half.indexOf(half.reduce(math.max)) / half.length,
-        low / s,
+        _mean(x),
+        _std(x),
+        _median(x),
+        x.reduce(math.min),
+        x.reduce(math.max),
+        _ptp(x),
+        _percentile(x, 5),
+        _percentile(x, 25),
+        _percentile(x, 75),
+        _percentile(x, 95),
+        math.sqrt(x.map((e) => e * e).reduce((a, b) => a + b) / x.length),
+        _meanAbsDiff(x),
+        _sumAbsDiff(x),
+        _variance(x),
+        x.map((e) => e * e).reduce((a, b) => a + b) / x.length,
       ]);
     }
+    return out;
+  }
 
-    if (data.length > 1) {
-      var zc = 0;
-      for (var i = 0; i < data.length - 1; i++) {
-        if (_signNum(data[i]) != _signNum(data[i + 1])) zc++;
+  static List<double> _crossAxisCorrelations(List<List<double>> data) {
+    return <double>[
+      _corr(data[0], data[1]),
+      _corr(data[0], data[2]),
+      _corr(data[1], data[2]),
+    ];
+  }
+
+  static List<double> _magnitudeFeatures(List<List<double>> data) {
+    final mag = List<double>.generate(
+      data[0].length,
+      (i) => math.sqrt(
+        data[0][i] * data[0][i] + data[1][i] * data[1][i] + data[2][i] * data[2][i],
+      ),
+    );
+    return <double>[
+      _mean(mag),
+      _std(mag),
+      mag.reduce(math.max),
+      _percentile(mag, 95),
+      mag.fold<double>(0.0, (a, b) => a + b),
+    ];
+  }
+
+  static List<double> _frequencyDomainFeatures(
+    List<List<double>> data,
+    double fs,
+  ) {
+    final out = <double>[];
+    for (var axis = 0; axis < data.length; axis++) {
+      final fftMag = _rfftMagnitudes(data[axis]);
+      if (fftMag.length <= 1) {
+        out.addAll([0.0, 0.0]);
+        continue;
       }
-      out.add(zc / data.length);
-    } else {
-      out.add(0.0);
+      var maxIdx = 1;
+      for (var i = 2; i < fftMag.length; i++) {
+        if (fftMag[i] > fftMag[maxIdx]) {
+          maxIdx = i;
+        }
+      }
+      final domFreq = maxIdx * fs / data[axis].length;
+      var spectralEnergy = 0.0;
+      for (final v in fftMag) {
+        spectralEnergy += v * v;
+      }
+      spectralEnergy /= fftMag.length;
+      out.addAll([domFreq, spectralEnergy]);
     }
     return out;
   }
 
-  static List<double> _gyroStats(List<double> data) {
-    final ms = data.map((e) => e.abs());
-    final sumAbs = ms.fold<double>(0.0, (a, b) => a + b);
-    return [
-      _mean(data),
-      _std(data),
-      ms.reduce(math.max),
-      sumAbs,
-      data.map((e) => e * e).reduce((a, b) => a + b) / data.length,
-    ];
-  }
-
-  static List<double> _magnitudeBlock(List<double> magnitude) {
-    final out = <double>[
-      _mean(magnitude),
-      _std(magnitude),
-      magnitude.reduce(math.max),
-      _percentile(magnitude, 95),
-      _argmax(magnitude) / magnitude.length,
-      magnitude.fold<double>(0.0, (a, b) => a + b),
-      _meanAbsDiff(magnitude),
-    ];
-    if (magnitude.length > 10) {
-      final h = _std(magnitude);
-      final peaks = _findPeaks(magnitude, height: h, distance: 5);
-      if (peaks.isEmpty) {
-        out.addAll([0.0, 0.0, 0.0, 0.0]);
-      } else {
-        final ph = peaks.map((i) => magnitude[i]).toList();
-        out.addAll([
-          peaks.length.toDouble(),
-          ph.reduce(math.max),
-          _mean(ph),
-          peaks.first / magnitude.length,
-        ]);
-      }
-    } else {
-      out.addAll([0.0, 0.0, 0.0, 0.0]);
+  static List<double> _orientationStats(List<List<double>> data) {
+    final out = <double>[];
+    for (var axis = 0; axis < data.length; axis++) {
+      final x = data[axis];
+      out.addAll([_mean(x), _std(x), _ptp(x)]);
     }
+    final azimuthRad = data[0].map((v) => v * math.pi / 180.0).toList();
+    final cMean = _mean(azimuthRad.map(math.cos).toList());
+    final sMean = _mean(azimuthRad.map(math.sin).toList());
+    final mrl = math.sqrt(cMean * cMean + sMean * sMean);
+    out.add(mrl);
     return out;
   }
 
-  /// scipy.signal.find_peaks with scalar `height` and `distance` (approximate).
-  static List<int> _findPeaks(List<double> y, {required double height, required int distance}) {
-    final n = y.length;
-    final candidates = <int>[];
-    for (var i = 0; i < n; i++) {
-      if (y[i] < height) continue;
-      var isLocalMax = true;
-      if (i > 0 && y[i] < y[i - 1]) isLocalMax = false;
-      if (i < n - 1 && y[i] < y[i + 1]) isLocalMax = false;
-      if (isLocalMax) candidates.add(i);
-    }
-    candidates.sort((a, b) => y[b].compareTo(y[a]));
-    final picked = <int>[];
-    for (final idx in candidates) {
-      if (picked.every((p) => (p - idx).abs() >= distance)) {
-        picked.add(idx);
-      }
-    }
-    picked.sort();
-    return picked;
-  }
-
-  static int _signNum(double x) => x > 0 ? 1 : (x < 0 ? -1 : 0);
-
-  static int _argmax(List<double> d) {
-    var best = 0;
-    for (var i = 1; i < d.length; i++) {
-      if (d[i] > d[best]) best = i;
-    }
-    return best;
-  }
-
-  static int _argmaxAbs(List<double> d) {
-    var best = 0;
-    for (var i = 1; i < d.length; i++) {
-      if (d[i].abs() > d[best].abs()) best = i;
-    }
-    return best;
-  }
-
-  /// Naive DFT magnitudes for indices 0 .. n/2 - 1 (matches numpy fft ordering roughly).
+  /// Naive real FFT magnitudes for indices 0..n/2 (inclusive).
   static List<double> _rfftMagnitudes(List<double> x) {
     final n = x.length;
-    final half = n ~/ 2;
-    if (half == 0) return [];
-    final out = List<double>.filled(half, 0.0);
+    final bins = n ~/ 2 + 1;
+    if (bins <= 0) return [];
+    final out = List<double>.filled(bins, 0.0);
     const tau = 2 * math.pi;
-    for (var k = 0; k < half; k++) {
+    for (var k = 0; k < bins; k++) {
       double re = 0, im = 0;
       for (var t = 0; t < n; t++) {
         final angle = -tau * k * t / n;
@@ -349,37 +279,6 @@ class MotionFeatureExtractor {
       sum += (d[i + 1] - d[i]).abs();
     }
     return sum;
-  }
-
-  static double _skew(List<double> d) {
-    if (d.length < 3) return 0.0;
-    final m = _mean(d);
-    var m2 = 0.0, m3 = 0.0;
-    for (final v in d) {
-      final x = v - m;
-      m2 += x * x;
-      m3 += x * x * x;
-    }
-    m2 /= d.length;
-    m3 /= d.length;
-    if (m2 < 1e-12) return 0.0;
-    return m3 / (m2 * math.sqrt(m2));
-  }
-
-  /// scipy.stats.kurtosis (Fisher / excess).
-  static double _kurtosisExcess(List<double> d) {
-    if (d.length < 4) return 0.0;
-    final m = _mean(d);
-    var m2 = 0.0, m4 = 0.0;
-    for (final v in d) {
-      final x = v - m;
-      m2 += x * x;
-      m4 += x * x * x * x;
-    }
-    m2 /= d.length;
-    m4 /= d.length;
-    if (m2 < 1e-12) return 0.0;
-    return m4 / (m2 * m2) - 3.0;
   }
 
   static double _corr(List<double> a, List<double> b) {

@@ -1,7 +1,7 @@
 {
   "schema_version": "1.2",
-  "description": "SisFall / elderly monitoring — 116-D enhanced features for fall + ADL (RobustScaler); 263-D raw for fall-type. Training: scripts/run_training.py. Added datasets: scripts/sisfall/. Inference: scripts/inference/motion_pipeline.py.",
-  "enhanced_feature_dim": 116,
+  "description": "MobiAct monitoring — 128-D enhanced features for fall + ADL (RobustScaler); 263-D raw for fall-type. Training: scripts/run_training.py. Inference: scripts/inference/motion_pipeline.py.",
+  "enhanced_feature_dim": 128,
   "fall_type_raw_dim": 263,
   "fall_type_selected_features": 150,
   "enhanced_pipeline": "scripts/baseline_fall/enhanced_features.py extract_enhanced_features — fall: scripts/baseline_fall/train_fall_detection_mobiact.py (or train_mobiact_baselines.py); ADL: scripts/baseline_adl/train_mobiact_adl.py",
@@ -15,9 +15,9 @@
       "scaler_path": "baseline_fall/scaler_fall.pkl"
     },
     "adl": {
-      "model_path": "baseline_adl/best_adl_model.pkl",
-      "scaler_path": "baseline_adl/scaler_adl.pkl",
-      "label_encoder_path": "baseline_adl/adl_label_encoder.pkl"
+      "model_path": "lgbm_adl_model.pkl",
+      "scaler_path": "lgbm_scaler.pkl",
+      "label_encoder_path": "lgbm_label_encoder.pkl"
     },
     "fall_type": {
       "model_path": "baseline_falltype/best_fall_classifier.pkl",
