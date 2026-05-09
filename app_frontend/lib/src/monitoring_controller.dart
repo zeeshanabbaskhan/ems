@@ -181,6 +181,22 @@ class MonitoringController extends ChangeNotifier {
   DetectionResultModel? get lastDetection => _lastDetection;
   MotionInferenceResponseModel? get lastMotionInference => _lastMotionInference;
   LiveStatusModel? get liveStatus => _liveStatus;
+
+  /// Prefer [lastDetection] from the latest ingest response over [liveStatus] polled via
+  /// `GET /api/v1/monitor/patients/live`. Right after each upload, polling can briefly return
+  /// a stale row and made the risk meter look “stuck” (e.g. ~40%).
+  double get displayRiskScore =>
+      _lastDetection?.score ?? _liveStatus?.score ?? 0.0;
+
+  double get displayFallProbability =>
+      _lastDetection?.fallProbability ?? _liveStatus?.fallProbability ?? 0.0;
+
+  String get displaySeverity =>
+      _lastDetection?.severity ?? _liveStatus?.severity ?? 'low';
+
+  String? get displayPredictedActivity =>
+      _lastDetection?.predictedActivityClass ??
+      _liveStatus?.predictedActivityClass;
   AlertRecordModel? get activeAlert => _activeAlert;
   TelemetrySnapshotModel? get latestTelemetry => _latestTelemetry;
 
@@ -1359,7 +1375,11 @@ class MonitoringController extends ChangeNotifier {
       }
 
       _statusMessage = response.detection.message;
-      unawaited(refreshCaregiverData(silent: true));
+      // Elders: skip polling `/monitor/patients/live` every batch — it races the ingest upsert and
+      // overwrote `_liveStatus` with a stale score. Caregivers still refresh for alerts / roster.
+      if (isCaregiverAuthenticated) {
+        unawaited(refreshCaregiverData(silent: true));
+      }
     } catch (error) {
       if (!_isStreaming || _sessionId != currentSessionId) {
         return;

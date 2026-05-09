@@ -909,17 +909,12 @@ class CaregiverDashboard extends StatelessWidget {
       final isLatched =
           controller.patientId != null &&
           controller.isPatientFallLatched(controller.patientId!);
-      final severity = isLatched ? 'fall_detected' : (live?.severity ?? 'low');
-      final risk = ((live?.score ?? controller.lastDetection?.score ?? 0) * 100)
-          .round();
+      final severity = isLatched ? 'fall_detected' : controller.displaySeverity;
+      final risk = (controller.displayRiskScore * 100).round();
       final statusText = isLatched
           ? 'Fall detected. Alarm state is latched until caregiver clears alarm.'
           : (_cleanDetectionMessage(live?.lastMessage) ?? 'No live data yet.');
-      final movement =
-          (controller.lastDetection?.fallProbability ??
-              live?.fallProbability ??
-              0) *
-          100;
+      final movement = controller.displayFallProbability * 100;
       children.addAll([
         _PatientHeroCard(
           name: controller.patientName.isEmpty
@@ -953,7 +948,7 @@ class CaregiverDashboard extends StatelessWidget {
                 const SizedBox(height: 6),
                 Text(statusText, style: const TextStyle(fontSize: 14)),
                 Text(
-                  'Fall probability ${(live.fallProbability * 100).toStringAsFixed(1)}% · score ${live.score.toStringAsFixed(2)}',
+                  'Fall probability ${(controller.displayFallProbability * 100).toStringAsFixed(1)}% · score ${controller.displayRiskScore.toStringAsFixed(2)}',
                   style: const TextStyle(fontSize: 13, color: Color(0xFF5D7385)),
                 ),
               ],
@@ -1181,20 +1176,13 @@ class LiveMonitoringScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final live = controller.liveStatus;
-    final severity = live?.severity ?? 'low';
-    final riskValue = (live?.score ?? controller.lastDetection?.score ?? 0)
-        .clamp(0.0, 1.0)
-        .toDouble();
-    final fallValue =
-        (live?.fallProbability ??
-                controller.lastDetection?.fallProbability ??
-                0)
-            .clamp(0.0, 1.0)
-            .toDouble();
+    final severity = controller.displaySeverity;
+    final riskValue = controller.displayRiskScore.clamp(0.0, 1.0);
+    final fallValue = controller.displayFallProbability.clamp(0.0, 1.0);
     final activityLabel =
-        (live?.predictedActivityClass ?? '').trim().isEmpty
+        (controller.displayPredictedActivity ?? '').trim().isEmpty
         ? 'Unavailable'
-        : live!.predictedActivityClass!;
+        : controller.displayPredictedActivity!;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -1204,7 +1192,7 @@ class LiveMonitoringScreen extends StatelessWidget {
           title: 'Live Status: ${_severityLabel(severity)}',
           message: _cleanDetectionMessage(live?.lastMessage) ?? 'Monitoring active.',
         ),
-        if (live != null) ...[
+        if (live != null || controller.lastDetection != null) ...[
           const SizedBox(height: 10),
           Container(
             width: double.infinity,
@@ -1219,26 +1207,31 @@ class LiveMonitoringScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  _cleanDetectionMessage(live.lastMessage) ?? live.lastMessage,
+                  _cleanDetectionMessage(
+                        controller.lastDetection?.message ?? live?.lastMessage,
+                      ) ??
+                      live?.lastMessage ??
+                      'Monitoring active.',
                   style: const TextStyle(fontSize: 14),
                 ),
                 Text(
-                  'Fall probability ${(live.fallProbability * 100).toStringAsFixed(1)}% · score ${live.score.toStringAsFixed(2)}',
+                  'Fall probability ${(controller.displayFallProbability * 100).toStringAsFixed(1)}% · score ${controller.displayRiskScore.toStringAsFixed(2)}',
                   style: const TextStyle(fontSize: 13, color: Color(0xFF5D7385)),
                 ),
               ],
             ),
           ),
           const SizedBox(height: 10),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(14),
-            decoration: _cardDecoration(),
-            child: Text(
-              _liveSummaryLine(live),
-              style: const TextStyle(fontSize: 14),
+          if (live != null)
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: _cardDecoration(),
+              child: Text(
+                _liveSummaryLine(live),
+                style: const TextStyle(fontSize: 14),
+              ),
             ),
-          ),
         ],
         const SizedBox(height: 16),
         const _WavePulseCard(),
@@ -1426,9 +1419,8 @@ class InsightsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final risk = ((controller.liveStatus?.score ?? 0) * 100).round();
-    final movement = ((controller.liveStatus?.fallProbability ?? 0) * 100)
-        .round();
+    final risk = (controller.displayRiskScore * 100).round();
+    final movement = (controller.displayFallProbability * 100).round();
     final summary = controller.summary;
     final insight = movement < 25
         ? 'Patient has been less active than usual today.'
