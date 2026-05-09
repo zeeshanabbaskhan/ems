@@ -48,15 +48,16 @@ class InferenceArtifacts:
     adl_model: Any
     adl_scaler: Any
     adl_encoder: Any
-    fall_type_model: Any
-    fall_type_scaler: Any
+    fall_type_model: Any | None
+    fall_type_scaler: Any | None
     fall_type_indices: np.ndarray
-    fall_type_encoder: Any
+    fall_type_encoder: Any | None
     enhanced_dim: int
     fall_type_dim: int
     fall_threshold: float
     fall_binary_enabled: bool
     fall_binary_issue: str | None
+    fall_type_enabled: bool
 
 
 def load_artifacts(manifest_path: Path, models_dir: Path) -> InferenceArtifacts:
@@ -80,17 +81,26 @@ def load_artifacts(manifest_path: Path, models_dir: Path) -> InferenceArtifacts:
     adl_scaler = joblib.load(p(art["adl"]["scaler_path"]))
     adl_encoder = joblib.load(p(art["adl"]["label_encoder_path"]))
 
-    fall_type_model = joblib.load(p(art["fall_type"]["model_path"]))
-    fall_type_scaler = joblib.load(p(art["fall_type"]["scaler_path"]))
-    fall_type_indices = np.asarray(joblib.load(p(art["fall_type"]["feature_indices_path"])), dtype=int)
-    fall_type_encoder = joblib.load(p(art["fall_type"]["label_encoder_path"]))
+    ft_cfg = art.get("fall_type")
+    fall_type_model: Any | None = None
+    fall_type_scaler: Any | None = None
+    fall_type_indices = np.array([], dtype=int)
+    fall_type_encoder: Any | None = None
+    fall_type_enabled = False
+    if ft_cfg:
+        fall_type_model = joblib.load(p(ft_cfg["model_path"]))
+        fall_type_scaler = joblib.load(p(ft_cfg["scaler_path"]))
+        fall_type_indices = np.asarray(joblib.load(p(ft_cfg["feature_indices_path"])), dtype=int)
+        fall_type_encoder = joblib.load(p(ft_cfg["label_encoder_path"]))
+        fall_type_enabled = True
 
     na = getattr(adl_scaler, "n_features_in_", None)
     if na is not None and int(na) != enhanced_dim:
         raise ValueError(f"ADL scaler wants {na}, manifest {enhanced_dim}")
-    ft_n = getattr(fall_type_scaler, "n_features_in_", None)
-    if ft_n is not None and int(ft_n) != fall_type_dim:
-        raise ValueError(f"Fall-type scaler wants {ft_n}, manifest {fall_type_dim}")
+    if fall_type_enabled and fall_type_scaler is not None:
+        ft_n = getattr(fall_type_scaler, "n_features_in_", None)
+        if ft_n is not None and int(ft_n) != fall_type_dim:
+            raise ValueError(f"Fall-type scaler wants {ft_n}, manifest {fall_type_dim}")
 
     fall_model: Any | None = None
     fall_scaler: Any | None = None
@@ -125,6 +135,7 @@ def load_artifacts(manifest_path: Path, models_dir: Path) -> InferenceArtifacts:
         fall_threshold=threshold,
         fall_binary_enabled=fall_binary_enabled,
         fall_binary_issue=fall_binary_issue,
+        fall_type_enabled=fall_type_enabled,
     )
 
 
@@ -139,12 +150,17 @@ def run_inference(
     ori_window: list[list[float]] | None = None,
 ) -> dict[str, Any]:
     def _predict_proba_safely(model: Any, values: np.ndarray) -> np.ndarray:
-        # LightGBM/sklearn can warn when model was fit with feature names but runtime
+        # LightGBM/XGBoost/sklearn can warn when model was fit with feature names but runtime
         # sends plain ndarray. This inference path intentionally sends arrays.
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
                 message="X does not have valid feature names, but LGBMClassifier was fitted with feature names",
+                category=UserWarning,
+            )
+            warnings.filterwarnings(
+                "ignore",
+                message="X does not have valid feature names, but XGBClassifier was fitted with feature names",
                 category=UserWarning,
             )
             return model.predict_proba(values)
@@ -203,6 +219,13 @@ def run_inference(
     out["branch"] = "fall"
     out["activity_class_index"] = None
     out["activity_label"] = None
+
+    if not art.fall_type_enabled or art.fall_type_model is None:
+        out["fall_type_code"] = None
+        out["fall_type_label"] = None
+        out["fall_type_class_index"] = None
+        out["fall_type_skipped_reason"] = "fall_type_not_configured"
+        return out
 
     ft_source: list[float] | None = fall_type_features
     if ft_source is None and acc_window is not None:

@@ -47,6 +47,14 @@ DEBUG_SENSOR_LOGS = os.environ.get("EMS_DEBUG_SENSOR_LOGS", "1").strip().lower()
     "on",
 }
 
+# MobiAct fall-type codes (when optional fall-type artifacts are configured).
+_FALL_CODE_TO_NAME: dict[str, str] = {
+    "FOL": "Forward lying fall",
+    "FKL": "Front knees lying fall",
+    "BSC": "Backward sitting-chair fall",
+    "SDL": "Sideward lying fall",
+}
+
 # MobiAct ADL codebook used by training data loaders.
 _ADL_CODE_TO_NAME: dict[str, str] = {
     "STD": "Standing",
@@ -79,6 +87,18 @@ _ADL_INDEX_TO_CODE: dict[int, str] = {
     11: "STU",
     12: "WAL",
 }
+
+
+def _humanize_fall_type_label(raw_label: Any) -> str | None:
+    if raw_label is None:
+        return None
+    s = str(raw_label).strip()
+    if not s:
+        return None
+    upper = s.upper()
+    if upper in _FALL_CODE_TO_NAME:
+        return _FALL_CODE_TO_NAME[upper]
+    return s
 
 
 def _humanize_activity_label(raw_label: Any) -> str | None:
@@ -859,11 +879,14 @@ def ingest_live(body: IngestLiveBody):
             )
             p_fall = float(raw["fall_probability"])
             branch = str(raw.get("branch", ""))
-            inferred_activity = (
-                _humanize_activity_label(raw.get("activity_label"))
-                if raw.get("branch") == "adl"
-                else _humanize_activity_label(raw.get("fall_type_label"))
-            )
+            if raw.get("branch") == "adl":
+                inferred_activity = _humanize_activity_label(raw.get("activity_label"))
+            elif raw.get("branch") == "fall":
+                inferred_activity = _humanize_fall_type_label(
+                    raw.get("fall_type_label") or raw.get("fall_type_code")
+                ) or "Fall"
+            else:
+                inferred_activity = None
             ml_ok = True
             inference_source = "model"
             logger.info(

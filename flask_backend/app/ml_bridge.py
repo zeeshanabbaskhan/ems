@@ -1,4 +1,4 @@
-"""Convert ingest samples → 116-D features + 300×3 windows (SisFall / MobiAct training parity)."""
+"""Convert ingest samples → 128-D features (Colab `WINDOW_SIZE=128` @ 50 Hz) + 300×3 windows for optional fall-type."""
 
 from __future__ import annotations
 
@@ -8,7 +8,10 @@ import numpy as np
 
 from flask_backend.app.motion_enhanced_features import extract_enhanced_features
 
-_WINDOW = 300
+# Must match MobiAct Colab training / Flutter `MotionFeatureExtractor.windowLength`.
+_WINDOW_ENHANCED = 128
+# Fall-type pipeline (`scripts/baseline_falltype`) expects ~6 s @ 50 Hz.
+_WINDOW_FALL_TYPE = 300
 
 
 def _resample_rows(data: np.ndarray, target_len: int) -> np.ndarray:
@@ -40,7 +43,9 @@ def _sample_ori_degrees(s: dict[str, Any]) -> tuple[float, float, float]:
 
 def samples_to_feature_vector(samples: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Returns enhanced 116-D vector, acc (300,3), gyro (300,3), ori (300,3) for fall-type path.
+    Returns enhanced 128-D vector (same length scale as training), plus acc/gyro/ori resampled
+    to (300,3) for the optional 263-D fall-type branch when artifacts are present.
+
     Orientation defaults to zeros when [azimuth, pitch, roll] are absent (degrees).
     """
     if not samples:
@@ -61,14 +66,19 @@ def samples_to_feature_vector(samples: list[dict[str, Any]]) -> tuple[np.ndarray
         ori[i, 1] = pit
         ori[i, 2] = rol
 
-    acc_300 = _resample_rows(acc, _WINDOW)
-    gyro_300 = _resample_rows(gyro, _WINDOW)
-    ori_300 = _resample_rows(ori, _WINDOW)
+    acc_e = _resample_rows(acc, _WINDOW_ENHANCED)
+    gyro_e = _resample_rows(gyro, _WINDOW_ENHANCED)
+    ori_e = _resample_rows(ori, _WINDOW_ENHANCED)
 
-    xb = acc_300[np.newaxis, ...]
-    yb = gyro_300[np.newaxis, ...]
-    zb = ori_300[np.newaxis, ...]
+    xb = acc_e[np.newaxis, ...]
+    yb = gyro_e[np.newaxis, ...]
+    zb = ori_e[np.newaxis, ...]
     feat = extract_enhanced_features(xb, yb, zb)
+
+    acc_300 = _resample_rows(acc, _WINDOW_FALL_TYPE)
+    gyro_300 = _resample_rows(gyro, _WINDOW_FALL_TYPE)
+    ori_300 = _resample_rows(ori, _WINDOW_FALL_TYPE)
+
     return feat[0], acc_300, gyro_300, ori_300
 
 

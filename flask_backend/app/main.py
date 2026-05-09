@@ -88,6 +88,7 @@ def inference_status():
         "schema_version": art.manifest.get("schema_version"),
         "enhanced_feature_dim": art.enhanced_dim,
         "fall_type_raw_dim": art.fall_type_dim,
+        "fall_type_enabled": getattr(art, "fall_type_enabled", False),
         "fall_threshold": art.fall_threshold,
         "model_root": str(model_root()),
     }

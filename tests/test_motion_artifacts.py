@@ -40,6 +40,8 @@ def test_manifest_dims_match_scalers(artifacts: InferenceArtifacts, inference_ma
 
 
 def test_fall_type_feature_indices_in_bounds(artifacts: InferenceArtifacts) -> None:
+    if not artifacts.fall_type_enabled:
+        pytest.skip("fall_type stack not loaded — optional when manifest fall_type is null")
     idx = artifacts.fall_type_indices
     assert idx.ndim == 1
     assert np.all(idx >= 0)
@@ -48,6 +50,8 @@ def test_fall_type_feature_indices_in_bounds(artifacts: InferenceArtifacts) -> N
 
 def test_fall_type_inference_matrix_shape(artifacts: InferenceArtifacts) -> None:
     """Scaled (1,350) -> column subset must match estimator input."""
+    if not artifacts.fall_type_enabled:
+        pytest.skip("fall_type stack not loaded — optional when manifest fall_type is null")
     ft = np.zeros((1, artifacts.fall_type_dim), dtype=np.float64)
     xs = artifacts.fall_type_scaler.transform(ft)
     xsel = xs[:, artifacts.fall_type_indices]
@@ -94,6 +98,8 @@ def test_run_inference_full_vectors_fall_type_when_fall(artifacts: InferenceArti
 
 def test_fall_type_estimator_input_width(artifacts: InferenceArtifacts) -> None:
     """Updated fall-type model must accept MI-selected columns (regression guard)."""
+    if not artifacts.fall_type_enabled:
+        pytest.skip("fall_type stack not loaded — optional when manifest fall_type is null")
     ft = np.zeros((1, artifacts.fall_type_dim), dtype=np.float64)
     xs = artifacts.fall_type_scaler.transform(ft)
     xsel = xs[:, artifacts.fall_type_indices]

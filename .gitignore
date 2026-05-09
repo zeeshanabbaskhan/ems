@@ -1,5 +1,6 @@
 # Data and generated outputs
 /data/
+/MobiAct_Dataset_v2.0/
 
 
 DETAILED_PROJECT_ANALYSIS.md
@@ -70,3 +71,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.iml
+
+# Frozen ML artifacts (upload separately — Drive / release bundle)
+flask_backend/models/**/*.pkl

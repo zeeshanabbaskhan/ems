@@ -39,7 +39,9 @@ def test_fall_detection_binary_116d_forward(repo_root: Path, inference_manifest:
 def test_fall_type_263d_pipeline_forward(repo_root: Path, inference_manifest: dict) -> None:
     """263-D raw vector → StandardScaler → MI columns → XGBoost 4-class."""
     model_dir = repo_root / "flask_backend" / "models"
-    ft_art = inference_manifest["artifacts"]["fall_type"]
+    ft_art = inference_manifest["artifacts"].get("fall_type")
+    if ft_art is None:
+        pytest.skip("fall_type artifacts omitted — optional in inference_manifest.json")
     scaler = joblib.load(model_dir / ft_art["scaler_path"])
     model = joblib.load(model_dir / ft_art["model_path"])
     indices = np.asarray(joblib.load(model_dir / ft_art["feature_indices_path"]))
