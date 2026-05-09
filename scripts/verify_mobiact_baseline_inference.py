@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import statistics
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -28,6 +30,7 @@ if str(_REPO) not in sys.path:
 
 os.environ.setdefault("REPO_ROOT", str(_REPO))
 
+from flask_backend.app.detector_state import build_detection_payload  # noqa: E402
 from flask_backend.app.motion_enhanced_features import extract_enhanced_features  # noqa: E402
 
 _SCRIPTS = _REPO / "scripts"
@@ -48,6 +51,41 @@ FALL_LABELS = frozenset({"FOL", "FKL", "BSC", "SDL"})
 
 def _repo_models_dir() -> Path:
     return (_REPO / "flask_backend" / "models").resolve()
+
+
+def _window_to_ingest_samples(acc: np.ndarray, gyro: np.ndarray) -> list[dict[str, Any]]:
+    """Same keys as ``POST /api/v1/ingest/live`` samples → ``detector_state.simple_signal_metrics``."""
+    rows: list[dict[str, Any]] = []
+    for i in range(acc.shape[0]):
+        rows.append(
+            {
+                "acc_x": float(acc[i, 0]),
+                "acc_y": float(acc[i, 1]),
+                "acc_z": float(acc[i, 2]),
+                "gyro_x": float(gyro[i, 0]),
+                "gyro_y": float(gyro[i, 1]),
+                "gyro_z": float(gyro[i, 2]),
+            }
+        )
+    return rows
+
+
+def _risk_from_window(
+    art: InferenceArtifacts,
+    acc: np.ndarray,
+    gyro: np.ndarray,
+    raw: dict[str, Any],
+) -> dict[str, Any]:
+    """Live-ingest equivalent risk: ``build_detection_payload`` (severity + score 0–1)."""
+    samples = _window_to_ingest_samples(acc, gyro)
+    act = str(raw["activity_label"]) if raw.get("branch") == "adl" and raw.get("activity_label") else None
+    return build_detection_payload(
+        samples=samples,
+        fall_probability=float(raw["fall_probability"]),
+        inferred_activity=act,
+        ml_ok=True,
+        threshold=float(art.fall_threshold),
+    )
 
 
 def _features_from_arrays(acc: np.ndarray, gyro: np.ndarray, ori: np.ndarray) -> np.ndarray:
@@ -220,6 +258,29 @@ def main() -> int:
     run_case("synthetic_standing", *_synthetic_standing(), None)
     run_case("synthetic_jerk", *_synthetic_fall_jerk(), None)
 
+    # Risk score line (matches Flutter “Risk %” = detection.score × 100 from ingest).
+    for syn_name, acc, gyro, ori in (
+        ("synthetic_standing", *_synthetic_standing()),
+        ("synthetic_jerk", *_synthetic_fall_jerk()),
+    ):
+        feat = _features_from_arrays(acc, gyro, ori).tolist()
+        rw = run_inference(
+            art,
+            feat,
+            None,
+            predict_fall_type=False,
+            acc_window=None,
+            gyro_window=None,
+            ori_window=None,
+        )
+        det = _risk_from_window(art, acc, gyro, rw)
+        print(
+            f"[risk:{syn_name}] score={det['score']:.4f} ({det['score'] * 100:.1f}%)  "
+            f"severity={det['severity']}  p_fall={rw['fall_probability']:.4f}  "
+            f"peak_acc_g={det['peak_acc_g']:.2f}"
+        )
+    print()
+
     csv_root = args.csv_root.resolve()
     paths = _iter_sample_csvs(csv_root, args.max_csv)
     if not paths:
@@ -233,6 +294,10 @@ def main() -> int:
         adl_correct = 0
         adl_total = 0
         skipped = 0
+        risk_scores: list[float] = []
+        risk_adl: list[float] = []
+        risk_fall_lab: list[float] = []
+        sev_counts: dict[str, int] = {}
         for path in paths:
             block = _stable_window_from_csv(path)
             if block is None:
@@ -249,7 +314,16 @@ def main() -> int:
                 gyro_window=None,
                 ori_window=None,
             )
+            det = _risk_from_window(art, acc, gyro, raw)
+            sc = float(det["score"])
+            risk_scores.append(sc)
+            sev = str(det["severity"])
+            sev_counts[sev] = sev_counts.get(sev, 0) + 1
             true_fall = lab in FALL_LABELS
+            if true_fall:
+                risk_fall_lab.append(sc)
+            else:
+                risk_adl.append(sc)
             pred_fall = bool(raw["is_fall"])
             if true_fall and pred_fall:
                 tp += 1
@@ -274,6 +348,22 @@ def main() -> int:
             print(f"    Accuracy (4-cell)         : {(tp + tn) / n:.4f}")
         if adl_total:
             print(f"  ADL activity exact match    : {adl_correct}/{adl_total} = {adl_correct / adl_total:.4f}")
+        print()
+        print("  Risk score (ingest parity: detector_state.build_detection_payload):")
+        print(
+            "    score = min(1, max(p_fall, peak_acc_g/5*0.3 + p_fall*0.7)); "
+            "severity from p_fall vs threshold + impact gates"
+        )
+        if risk_scores:
+            print(f"    All windows    : min={min(risk_scores):.4f}  max={max(risk_scores):.4f}  "
+                  f"mean={statistics.mean(risk_scores):.4f}  median={statistics.median(risk_scores):.4f}")
+        if risk_adl:
+            print(f"    CSV label ADL  : mean={statistics.mean(risk_adl):.4f}  "
+                  f"median={statistics.median(risk_adl):.4f}  (n={len(risk_adl)})")
+        if risk_fall_lab:
+            print(f"    CSV label fall : mean={statistics.mean(risk_fall_lab):.4f}  "
+                  f"median={statistics.median(risk_fall_lab):.4f}  (n={len(risk_fall_lab)})")
+        print(f"    Severity counts: {dict(sorted(sev_counts.items()))}")
         print(
             "\n  Note: one window is taken from the first long same-label segment per file; "
             "this is a smoke test, not full sliding-window test-set accuracy.\n"
