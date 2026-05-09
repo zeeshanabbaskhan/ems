@@ -821,6 +821,18 @@ def ingest_live(body: IngestLiveBody):
     feat_vec, acc300, gyro300, ori300 = samples_to_feature_vector(samples_dict)
     acc_w, gyro_w, ori_w = acc_gyro_ori_to_window_lists(acc300, gyro300, ori300)
     if DEBUG_SENSOR_LOGS:
+        sensor_msg = (
+            "[ingest/live] sensors "
+            f"patient_id={body.patient_id} session_id={body.session_id} raw_samples={len(samples_dict)} "
+            f"acc300={_preview_rows(acc_w)} gyro300={_preview_rows(gyro_w)} ori300={_preview_rows(ori_w)}"
+        )
+        feat_msg = (
+            "[ingest/live] features "
+            f"patient_id={body.patient_id} session_id={body.session_id} dim={len(feat_vec)} "
+            f"head=[{_preview_vector(feat_vec.tolist())}]"
+        )
+        print(sensor_msg, flush=True)
+        print(feat_msg, flush=True)
         # Use warning level so logs are visible even when app logger INFO is filtered.
         logger.warning(
             "[ingest/live] sensors patient_id=%s session_id=%s raw_samples=%d acc300=%s gyro300=%s ori300=%s",
