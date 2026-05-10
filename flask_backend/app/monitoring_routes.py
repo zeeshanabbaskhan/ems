@@ -1688,6 +1688,20 @@ async def caregiver_alerts_ws(websocket: WebSocket, token: str = Query(..., min_
         await hub.unregister(cid, websocket)
 
 
+def _apply_deadband(arr: np.ndarray, threshold: float) -> np.ndarray:
+    if arr is None or arr.size == 0:
+        return arr
+    out = arr.copy()
+    for col in range(out.shape[1]):
+        prev = out[0, col]
+        for i in range(1, out.shape[0]):
+            if abs(out[i, col] - prev) < threshold:
+                out[i, col] = prev
+            else:
+                prev = out[i, col]
+    return out
+
+
 @router.post("/api/v1/inference/motion", response_model=MotionInferenceResponse)
 def inference_motion(body: MotionInferenceRequest):
     art = _get_art()
@@ -1698,6 +1712,12 @@ def inference_motion(body: MotionInferenceRequest):
     if body.acc_window is not None:
         acc = np.asarray(body.acc_window, dtype=np.float64)
         gyro = np.asarray(body.gyro_window, dtype=np.float64) if body.gyro_window is not None else None
+        
+        # Apply deadband to flatten micro-tremors (mimics phone resting in pocket)
+        acc = _apply_deadband(acc, 0.2)
+        if gyro is not None:
+            gyro = _apply_deadband(gyro, 0.2)
+
         ori = np.asarray(body.ori_window, dtype=np.float64) if body.ori_window is not None else None
         enhanced_in = build_enhanced_features_numpy(acc, gyro, ori).tolist()
         logger.info(
@@ -1706,6 +1726,8 @@ def inference_motion(body: MotionInferenceRequest):
         )
     else:
         enhanced_in = list(body.enhanced_features)  # type: ignore[arg-type]
+        acc = None
+        gyro = None
 
     try:
         raw = run_inference(
@@ -1713,9 +1735,10 @@ def inference_motion(body: MotionInferenceRequest):
             enhanced_in,
             body.fall_type_features,
             predict_fall_type=body.predict_fall_type,
-            acc_window=body.acc_window,
-            gyro_window=body.gyro_window,
+            acc_window=acc.tolist() if acc is not None else body.acc_window,
+            gyro_window=gyro.tolist() if gyro is not None else body.gyro_window,
             ori_window=body.ori_window,
+
         )
         return MotionInferenceResponse(**raw)
     except ValueError as e:
