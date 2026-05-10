@@ -8,10 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 class MotionInferenceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    enhanced_features: list[float] = Field(
-        ...,
-        description="144-D orientation-invariant feature vector (v2). When acc_window is sent (128 or 300 rows), "
-        "the server rebuilds features with training parity and ignores this field.",
+    enhanced_features: list[float] | None = Field(
+        default=None,
+        description="144-D orientation-invariant feature vector (v2). Optional when acc_window is provided — "
+        "the server always rebuilds features from raw windows for training parity.",
     )
     fall_type_features: list[float] | None = Field(
         default=None,
@@ -47,6 +47,12 @@ class MotionInferenceRequest(BaseModel):
             if len(row) != 3:
                 raise ValueError(f"sensor row {i} must have 3 columns (x,y,z)")
         return v
+
+    @model_validator(mode="after")
+    def _require_input_source(self) -> MotionInferenceRequest:
+        if self.acc_window is None and not self.enhanced_features:
+            raise ValueError("Provide either acc_window (recommended) or enhanced_features (144-D).")
+        return self
 
     @model_validator(mode="after")
     def _sensor_windows_same_length(self) -> MotionInferenceRequest:

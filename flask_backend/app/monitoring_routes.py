@@ -1649,8 +1649,6 @@ def inference_motion(body: MotionInferenceRequest):
         err = _RUNTIME.get("load_error", "not loaded")
         raise HTTPException(503, detail=f"Inference not loaded: {err}")
 
-    # Prefer server-side 144-D features when raw windows are supplied (training parity, phone FFT ≠ np.fft.rfft).
-    enhanced_in = list(body.enhanced_features)
     if body.acc_window is not None:
         acc = np.asarray(body.acc_window, dtype=np.float64)
         gyro = np.asarray(body.gyro_window, dtype=np.float64) if body.gyro_window is not None else None
@@ -1660,6 +1658,8 @@ def inference_motion(body: MotionInferenceRequest):
             "[inference/motion] server-built 144-D features from raw windows (rows=%s)",
             acc.shape[0],
         )
+    else:
+        enhanced_in = list(body.enhanced_features)  # type: ignore[arg-type]
 
     try:
         raw = run_inference(
@@ -1673,35 +1673,5 @@ def inference_motion(body: MotionInferenceRequest):
         )
         return MotionInferenceResponse(**raw)
     except ValueError as e:
-        msg = str(e)
-        # Backward compatibility:
-        # Older app builds may send stale enhanced_features with wrong dimension while server expects 144-D.
-        # If raw windows are present, rebuild enhanced features server-side and retry.
-        if "enhanced_features length" in msg and body.acc_window is not None:
-            try:
-                acc = np.asarray(body.acc_window, dtype=np.float64)
-                gyro = np.asarray(body.gyro_window, dtype=np.float64) if body.gyro_window is not None else None
-                ori = np.asarray(body.ori_window, dtype=np.float64) if body.ori_window is not None else None
-                rebuilt = build_enhanced_features_numpy(acc, gyro, ori).tolist()
-                logger.warning(
-                    "[inference/motion] rebuilt enhanced features from windows due to mismatch: %s",
-                    msg,
-                )
-                raw = run_inference(
-                    art,
-                    rebuilt,
-                    body.fall_type_features,
-                    predict_fall_type=body.predict_fall_type,
-                    acc_window=body.acc_window,
-                    gyro_window=body.gyro_window,
-                    ori_window=body.ori_window,
-                )
-                return MotionInferenceResponse(**raw)
-            except Exception as rebuild_exc:
-                logger.warning(
-                    "[inference/motion] fallback rebuild failed: %s",
-                    rebuild_exc,
-                    exc_info=True,
-                )
-        logger.warning("[inference/motion] request rejected: %s", msg)
+        logger.warning("[inference/motion] request rejected: %s", e)
         raise HTTPException(422, detail=str(e)) from e

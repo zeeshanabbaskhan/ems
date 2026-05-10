@@ -589,11 +589,10 @@ class BackendApiClient {
     );
   }
 
-  /// XGBoost pipeline: `enhancedFeatures` length = `enhanced_feature_dim` in `models/inference_manifest.json`.
-  /// When fall is predicted, send either `fallTypeFeatures` (263-D) or raw `accWindow`/`gyroWindow`/`oriWindow`
-  /// (300×3 each) so the server can build Colab fall-type features.
+  /// XGBoost pipeline: server always rebuilds 144-D features from raw windows (training parity).
+  /// Send either `fallTypeFeatures` (263-D) or raw `accWindow`/`gyroWindow`/`oriWindow`
+  /// (300×3 each) so the server can build fall-type features when that path is enabled.
   Future<Map<String, dynamic>> inferMotion({
-    required List<double> enhancedFeatures,
     List<double>? fallTypeFeatures,
     bool predictFallType = true,
     List<List<double>>? accWindow,
@@ -606,7 +605,6 @@ class BackendApiClient {
           _uri('/api/v1/inference/motion'),
           headers: _headers(jsonBody: true),
           body: jsonEncode({
-            'enhanced_features': enhancedFeatures,
             if (fallTypeFeatures != null) 'fall_type_features': fallTypeFeatures,
             'predict_fall_type': predictFallType,
             if (accWindow != null) 'acc_window': accWindow,

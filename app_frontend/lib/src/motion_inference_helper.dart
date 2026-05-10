@@ -1,59 +1,32 @@
 import 'api_client.dart';
-import 'package:flutter/foundation.dart';
 import 'models.dart';
 import 'motion_feature_extractor.dart';
 
-/// Validates window size against backend manifest, extracts **128-D** features, calls inference.
+/// Sends raw sensor windows to the server for 144-D feature extraction and XGBoost inference.
+/// The server always rebuilds features from raw windows (training parity with NumPy FFT).
 class MotionInferenceHelper {
   MotionInferenceHelper._();
 
   static const bool _enableInferenceDebugLogs = true;
 
-  /// Throws [ApiException] on HTTP errors; returns parsed JSON model on success.
+  /// Throws [ApiException] on HTTP errors; returns parsed inference result on success.
   static Future<MotionInferenceResponseModel> inferFromSamples(
     BackendApiClient client,
     List<SensorReadingPayload> samples, {
     bool predictFallType = false,
     List<double>? fallTypeFeatures,
-    int? expectedDim,
   }) async {
-    final dim = expectedDim ?? MotionFeatureExtractor.enhancedFeatureDim;
-
     if (_enableInferenceDebugLogs) {
       final first = samples.isNotEmpty ? samples.first.toJson() : null;
       final last = samples.isNotEmpty ? samples.last.toJson() : null;
-      debugPrint(
-        '[MotionInference] Sensor values received: '
-        'count=${samples.length}, first=$first, last=$last',
+      print(
+        '[MotionInference] Sending ${samples.length} samples to server '
+        '(server builds 144-D features): first=$first, last=$last',
       );
     }
 
-    final features = MotionFeatureExtractor.extractEnhanced(samples);
-    if (_enableInferenceDebugLogs) {
-      debugPrint(
-        '[MotionInference] Extracted features: '
-        'dim=${features.length}, preview=${_previewVector(features)}',
-      );
-    }
-    if (features.length != dim) {
-      throw ApiException(
-        'Enhanced features length ${features.length} does not match expected $dim.',
-      );
-    }
-    // Raw windows: server rebuilds 128-D features with NumPy FFT when fall-type artifacts are off (128 rows),
-    // or 300 rows when fall-type path needs Colab 263-D features.
     final sendFallTypeWindows = predictFallType && fallTypeFeatures == null;
-    if (_enableInferenceDebugLogs) {
-      debugPrint(
-        '[MotionInference] Model input: '
-        'enhancedDim=${features.length}, '
-        'predictFallType=$predictFallType, '
-        'fallTypeFeaturesDim=${fallTypeFeatures?.length ?? 0}, '
-        'rawWindowRows=${sendFallTypeWindows ? MotionFeatureExtractor.fallTypeWindowLength : MotionFeatureExtractor.windowLength}',
-      );
-    }
     final raw = await client.inferMotion(
-      enhancedFeatures: features,
       fallTypeFeatures: fallTypeFeatures,
       predictFallType: predictFallType,
       accWindow: sendFallTypeWindows
@@ -68,8 +41,8 @@ class MotionInferenceHelper {
     );
     final parsed = MotionInferenceResponseModel.fromJson(raw);
     if (_enableInferenceDebugLogs) {
-      debugPrint(
-        '[MotionInference] Model output: '
+      print(
+        '[MotionInference] Result: '
         'isFall=${parsed.isFall}, '
         'fallProbability=${parsed.fallProbability.toStringAsFixed(4)}, '
         'branch=${parsed.branch}, '
@@ -79,26 +52,5 @@ class MotionInferenceHelper {
       );
     }
     return parsed;
-  }
-
-  /// Optional server-side dimension check (cached by caller).
-  static Future<int> fetchEnhancedDim(BackendApiClient client) async {
-    final status = await client.getInferenceStatus();
-    final d = status['enhanced_feature_dim'];
-    if (d is int) return d;
-    if (d is num) return d.toInt();
-    return MotionFeatureExtractor.enhancedFeatureDim;
-  }
-
-  static String _previewVector(List<double> values, {int maxItems = 10}) {
-    final limit = values.length < maxItems ? values.length : maxItems;
-    final head = values
-        .take(limit)
-        .map((v) => v.toStringAsFixed(5))
-        .join(', ');
-    if (values.length <= maxItems) {
-      return '[$head]';
-    }
-    return '[$head, ...]';
   }
 }
