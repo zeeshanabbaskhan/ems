@@ -10,8 +10,8 @@ class MotionInferenceRequest(BaseModel):
 
     enhanced_features: list[float] = Field(
         ...,
-        description="128-D hand-crafted vector (legacy clients). When acc_window is sent (128 or 300 rows), "
-        "the server rebuilds features with NumPy FFT / training parity and ignores this field.",
+        description="144-D orientation-invariant feature vector (v2). When acc_window is sent (128 or 300 rows), "
+        "the server rebuilds features with training parity and ignores this field.",
     )
     fall_type_features: list[float] | None = Field(
         default=None,
@@ -20,7 +20,7 @@ class MotionInferenceRequest(BaseModel):
     predict_fall_type: bool = Field(default=True)
     acc_window: list[list[float]] | None = Field(
         default=None,
-        description="Optional accelerometer (m/s²): 128×3 for training-parity server features, or 300×3 for "
+        description="Optional accelerometer (m/s²): 128×3 for training-parity 144-D server features, or 300×3 for "
         "fall-type 263-D extraction when fall_type artifacts are enabled.",
     )
     gyro_window: list[list[float]] | None = Field(

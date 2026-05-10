@@ -1,20 +1,20 @@
 {
-  "schema_version": "1.3",
-  "description": "MobiAct Colab XGBoost baseline (128-D RobustScaler, WINDOW_SIZE=128 @ 50 Hz). Copy fall_xgboost_model.pkl, fall_scaler.pkl, adl_xgboost_model.pkl, adl_scaler.pkl, adl_label_encoder.pkl into models/baseline_adl&fall/. Fall subtype (263-D) optional — set artifacts.fall_type when available.",
-  "enhanced_feature_dim": 128,
+  "schema_version": "2.0",
+  "description": "MobiAct v2 XGBoost baseline (144-D orientation-invariant features, WINDOW_SIZE=128 @ 50 Hz). Models trained with magnitude-first gravity-separated feature design. ADL: 5 classes (JOG, LYI, SIT, STD, WAL). Fall detection: 4 fall types (BSC, FKL, FOL, SDL) vs 5 ADL.",
+  "enhanced_feature_dim": 144,
   "fall_type_raw_dim": 263,
   "fall_type_selected_features": 150,
-  "enhanced_pipeline": "flask_backend/app/motion_enhanced_features.py extract_enhanced_features — parity with Colab extract_window_features",
+  "enhanced_pipeline": "flask_backend/app/motion_enhanced_features.py extract_enhanced_features — parity with v2 training extract_window_features",
   "fall_type_pipeline": "optional: scripts/baseline_falltype — omit fall_type in manifest to disable",
-  "fall_probability_threshold": 0.5,
+  "fall_probability_threshold": 0.55,
   "random_state_training": 42,
   "artifacts": {
     "fall_binary": {
-      "model_path": "baseline_adl&fall/fall_xgboost_model.pkl",
+      "model_path": "baseline_adl&fall/fall_xgb_model.pkl",
       "scaler_path": "baseline_adl&fall/fall_scaler.pkl"
     },
     "adl": {
-      "model_path": "baseline_adl&fall/adl_xgboost_model.pkl",
+      "model_path": "baseline_adl&fall/adl_xgb_model.pkl",
       "scaler_path": "baseline_adl&fall/adl_scaler.pkl",
       "label_encoder_path": "baseline_adl&fall/adl_label_encoder.pkl"
     },

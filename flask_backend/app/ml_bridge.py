@@ -1,21 +1,66 @@
-"""Convert ingest samples → 128-D features (Colab `WINDOW_SIZE=128` @ 50 Hz) + 300×3 windows for optional fall-type."""
+"""Convert ingest samples → 144-D features (v2 training parity, WINDOW_SIZE=128 @ 50 Hz).
+
+Also provides ``VoteBuffer`` for sliding-window ADL majority-vote stabilisation across
+consecutive inference calls (falls bypass voting for immediate alert).
+"""
 
 from __future__ import annotations
 
+from collections import Counter, deque
 from typing import Any
 
 import numpy as np
 
 from flask_backend.app.motion_enhanced_features import extract_enhanced_features
 
-# Must match MobiAct Colab training / Flutter `MotionFeatureExtractor.windowLength`.
+# Must match MobiAct v2 training WINDOW_SIZE.
 _WINDOW_ENHANCED = 128
-# Fall-type pipeline (`scripts/baseline_falltype`) expects ~6 s @ 50 Hz.
+# Fall-type pipeline expects ~6 s @ 50 Hz.
 _WINDOW_FALL_TYPE = 300
+
+# Lower threshold matches v2 training recommendation (reduces missed falls).
+FALL_THRESHOLD_DEFAULT = 0.55
+
+# Majority-vote window: 7 consecutive inference windows ≈ 3.5 s at 50% overlap.
+VOTE_BUFFER_SIZE = 7
+
+
+class VoteBuffer:
+    """
+    Sliding majority-vote buffer for ADL predictions.
+
+    Falls are returned immediately and reset the buffer.
+    ADL labels are smoothed across the last ``size`` windows.
+    """
+
+    def __init__(self, size: int = VOTE_BUFFER_SIZE) -> None:
+        self._buf: deque[str] = deque(maxlen=size)
+        self._size = size
+
+    def push(self, label: str, is_fall: bool) -> str:
+        """Push a new prediction; return the (possibly smoothed) label."""
+        if is_fall:
+            self._buf.clear()
+            return label
+        self._buf.append(label)
+        if len(self._buf) < self._size:
+            return label
+        return Counter(self._buf).most_common(1)[0][0]
+
+    def reset(self) -> None:
+        self._buf.clear()
+
+    @property
+    def confidence(self) -> float:
+        """Fraction of buffer occupied by the current majority label."""
+        if not self._buf:
+            return 0.0
+        majority = Counter(self._buf).most_common(1)[0][0]
+        return Counter(self._buf)[majority] / len(self._buf)
 
 
 def _resample_rows(data: np.ndarray, target_len: int) -> np.ndarray:
-    """data: (n, 3) -> (target_len, 3)"""
+    """data: (n, 3) → (target_len, 3) via linear interpolation."""
     n = data.shape[0]
     if n == target_len:
         return data
@@ -30,23 +75,27 @@ def _resample_rows(data: np.ndarray, target_len: int) -> np.ndarray:
 
 
 def _sample_ori_degrees(s: dict[str, Any]) -> tuple[float, float, float]:
-    """MobiAct ori columns: azimuth (z), pitch (x), roll (y) in degrees — optional per axis."""
+    """MobiAct ori columns: azimuth, pitch, roll in degrees — optional per axis."""
 
     def g(key: str) -> float:
         v = s.get(key)
-        if v is None:
-            return 0.0
-        return float(v)
+        return 0.0 if v is None else float(v)
 
     return g("azimuth"), g("pitch"), g("roll")
 
 
-def samples_to_feature_vector(samples: list[dict[str, Any]]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def samples_to_feature_vector(
+    samples: list[dict[str, Any]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
-    Returns enhanced 128-D vector (same length scale as training), plus acc/gyro/ori resampled
-    to (300,3) for the optional 263-D fall-type branch when artifacts are present.
+    Convert a list of raw sensor samples to a 144-D feature vector.
 
-    Orientation defaults to zeros when [azimuth, pitch, roll] are absent (degrees).
+    Returns (feat_144, acc_300, gyro_300, ori_300):
+      - feat_144: (144,) float64 — primary enhanced feature vector
+      - acc_300 / gyro_300 / ori_300: (300, 3) resampled windows for the optional
+        fall-type branch (263-D) when artifacts are present.
+
+    Orientation defaults to zeros when azimuth/pitch/roll are absent.
     """
     if not samples:
         raise ValueError("empty samples")
@@ -70,10 +119,11 @@ def samples_to_feature_vector(samples: list[dict[str, Any]]) -> tuple[np.ndarray
     gyro_e = _resample_rows(gyro, _WINDOW_ENHANCED)
     ori_e = _resample_rows(ori, _WINDOW_ENHANCED)
 
-    xb = acc_e[np.newaxis, ...]
-    yb = gyro_e[np.newaxis, ...]
-    zb = ori_e[np.newaxis, ...]
-    feat = extract_enhanced_features(xb, yb, zb)
+    feat = extract_enhanced_features(
+        acc_e[np.newaxis, ...],
+        gyro_e[np.newaxis, ...],
+        ori_e[np.newaxis, ...],
+    )
 
     acc_300 = _resample_rows(acc, _WINDOW_FALL_TYPE)
     gyro_300 = _resample_rows(gyro, _WINDOW_FALL_TYPE)
@@ -84,14 +134,16 @@ def samples_to_feature_vector(samples: list[dict[str, Any]]) -> tuple[np.ndarray
 
 def build_enhanced_features_numpy(
     acc: np.ndarray,
-    gyro: np.ndarray | None,
-    ori: np.ndarray | None,
+    gyro: np.ndarray | None = None,
+    ori: np.ndarray | None = None,
 ) -> np.ndarray:
     """
-    Training-parity 128-D vector: linearly resample each modality to ``_WINDOW_ENHANCED`` rows
-    (matches Colab windowing), then ``extract_enhanced_features`` with NumPy FFT.
+    144-D feature vector from pre-assembled (n, 3) arrays.
 
-    Shapes: acc (n,3), gyro (n,3)|None, ori (n,3)|None — ``n`` may be 128 or 300 (or any ≥2).
+    Linearly resamples each modality to ``_WINDOW_ENHANCED`` rows (training parity),
+    then runs ``extract_enhanced_features``.
+
+    Shapes: acc (n, 3), gyro (n, 3)|None, ori (n, 3)|None — n ≥ 2.
     """
     acc = np.asarray(acc, dtype=np.float64)
     if acc.ndim != 2 or acc.shape[1] != 3:

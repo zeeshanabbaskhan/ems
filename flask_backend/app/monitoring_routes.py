@@ -1634,7 +1634,7 @@ def inference_motion(body: MotionInferenceRequest):
         err = _RUNTIME.get("load_error", "not loaded")
         raise HTTPException(503, detail=f"Inference not loaded: {err}")
 
-    # Prefer NumPy/training-parity 128-D features when raw windows are supplied (phone FFT ≠ np.fft.rfft).
+    # Prefer server-side 144-D features when raw windows are supplied (training parity, phone FFT ≠ np.fft.rfft).
     enhanced_in = list(body.enhanced_features)
     if body.acc_window is not None:
         acc = np.asarray(body.acc_window, dtype=np.float64)
@@ -1642,7 +1642,7 @@ def inference_motion(body: MotionInferenceRequest):
         ori = np.asarray(body.ori_window, dtype=np.float64) if body.ori_window is not None else None
         enhanced_in = build_enhanced_features_numpy(acc, gyro, ori).tolist()
         logger.info(
-            "[inference/motion] server-built 128-D features from raw windows (rows=%s)",
+            "[inference/motion] server-built 144-D features from raw windows (rows=%s)",
             acc.shape[0],
         )
 
@@ -1660,7 +1660,7 @@ def inference_motion(body: MotionInferenceRequest):
     except ValueError as e:
         msg = str(e)
         # Backward compatibility:
-        # Older app builds may still send 116-D enhanced_features while server expects 128-D.
+        # Older app builds may send stale enhanced_features with wrong dimension while server expects 144-D.
         # If raw windows are present, rebuild enhanced features server-side and retry.
         if "enhanced_features length" in msg and body.acc_window is not None:
             try:
