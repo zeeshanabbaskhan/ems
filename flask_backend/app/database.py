@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 from collections.abc import Iterator
@@ -17,17 +18,36 @@ _lock = threading.Lock()
 _db_path: Path | None = None
 
 
+def use_mongo() -> bool:
+    backend = os.environ.get("EMS_DB_BACKEND", "").strip().lower()
+    return backend == "mongo" or bool(os.environ.get("MONGO_URI") or os.environ.get("MONGODB_URI"))
+
+
 def get_db_path() -> Path:
+    if use_mongo():
+        raise RuntimeError("SQLite DB path is unavailable while MongoDB persistence is enabled")
     global _db_path
     if _db_path is None:
-        d = repo_root() / "data"
-        d.mkdir(parents=True, exist_ok=True)
-        _db_path = d / "elder_monitor.db"
+        raw = os.environ.get("EMS_DB_PATH") or os.environ.get("DATABASE_PATH")
+        if raw:
+            _db_path = Path(raw).expanduser().resolve()
+            _db_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            d = repo_root() / "data"
+            d.mkdir(parents=True, exist_ok=True)
+            _db_path = d / "elder_monitor.db"
     return _db_path
 
 
 @contextmanager
-def get_connection() -> Iterator[sqlite3.Connection]:
+def get_connection() -> Iterator[Any]:
+    if use_mongo():
+        from flask_backend.app.mongo_database import get_mongo_connection
+
+        with get_mongo_connection() as conn:
+            yield conn
+        return
+
     path = get_db_path()
     with _lock:
         conn = sqlite3.connect(path, check_same_thread=False)
@@ -40,6 +60,12 @@ def get_connection() -> Iterator[sqlite3.Connection]:
 
 
 def init_schema() -> None:
+    if use_mongo():
+        from flask_backend.app.mongo_database import init_mongo_schema
+
+        init_mongo_schema()
+        return
+
     with get_connection() as conn:
         c = conn.cursor()
         c.executescript(

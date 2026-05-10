@@ -614,6 +614,11 @@ class SensorReadingPayload {
     this.azimuth,
     this.pitch,
     this.roll,
+    // Gravity-removed, EMA-smoothed linear acc for activity classification.
+    // NOT sent to the server — raw acc is used for fall-detection g-spike.
+    this.filtAccX,
+    this.filtAccY,
+    this.filtAccZ,
   });
 
   final int timestampMs;
@@ -627,6 +632,11 @@ class SensorReadingPayload {
   final double? azimuth;
   final double? pitch;
   final double? roll;
+  /// Gravity-removed, low-pass-filtered linear acceleration (Phase 1b).
+  /// Falls back to raw acc when null (e.g. samples echoed from server).
+  final double? filtAccX;
+  final double? filtAccY;
+  final double? filtAccZ;
 
   factory SensorReadingPayload.fromJson(Map<String, dynamic> json) {
     return SensorReadingPayload(
@@ -640,6 +650,7 @@ class SensorReadingPayload {
       azimuth: _parseDoubleLoose(json['azimuth']),
       pitch: _parseDoubleLoose(json['pitch']),
       roll: _parseDoubleLoose(json['roll']),
+      // filtAcc is a client-only field; never present in server responses.
     );
   }
 
@@ -656,9 +667,11 @@ class SensorReadingPayload {
     if (azimuth != null) m['azimuth'] = azimuth!;
     if (pitch != null) m['pitch'] = pitch!;
     if (roll != null) m['roll'] = roll!;
+    // filtAcc is intentionally NOT serialised — server only receives raw acc.
     return m;
   }
 }
+
 
 class TelemetrySnapshotModel {
   TelemetrySnapshotModel({

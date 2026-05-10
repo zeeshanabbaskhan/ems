@@ -97,12 +97,9 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
     if (!context.mounted) {
       return;
     }
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute<void>(
-        builder: (_) => ElderlyMonitorApp(controller: c),
-      ),
-      (_) => false,
-    );
+    // Pop all routes back to root — RoleLauncher's listener will switch to
+    // the 'choose' screen automatically via _onControllerChange.
+    Navigator.of(context).popUntil((route) => route.isFirst);
   }
 
   @override
@@ -1180,9 +1177,9 @@ class LiveMonitoringScreen extends StatelessWidget {
     final riskValue = controller.displayRiskScore.clamp(0.0, 1.0);
     final fallValue = controller.displayFallProbability.clamp(0.0, 1.0);
     final activityLabel =
-        (controller.displayPredictedActivity ?? '').trim().isEmpty
+        (controller.smoothedActivityLabel ?? '').trim().isEmpty
         ? 'Unavailable'
-        : controller.displayPredictedActivity!;
+        : controller.smoothedActivityLabel!;
 
     return ListView(
       padding: const EdgeInsets.all(16),

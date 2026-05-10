@@ -28,18 +28,52 @@ class _RoleLauncherState extends State<RoleLauncher> {
   _LaunchPick _pick = _LaunchPick.choose;
 
   @override
+  void initState() {
+    super.initState();
+    // Auto-navigate if a persisted session token was restored during initialize().
+    if (widget.controller.isCaregiverAuthenticated) {
+      _pick = _LaunchPick.caregiver;
+    } else if (widget.controller.hasElderSession) {
+      _pick = _LaunchPick.elder;
+    }
+    widget.controller.addListener(_onControllerChange);
+  }
+
+  @override
+  void dispose() {
+    widget.controller.removeListener(_onControllerChange);
+    super.dispose();
+  }
+
+  void _onControllerChange() {
+    // When caregiverLogout or elderSignOut fires, go back to role picker.
+    if (widget.controller.consumeLoggedOut()) {
+      if (mounted) {
+        setState(() => _pick = _LaunchPick.choose);
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     switch (_pick) {
       case _LaunchPick.caregiver:
         return widget.caregiverShell;
       case _LaunchPick.elder:
+        // If an elder session is already active (token restored from storage),
+        // go straight to the patient home — no need to show the login gate again.
+        if (widget.controller.hasElderSession) {
+          return widget.patientHomeBuilder(widget.controller);
+        }
         return ElderGateScreen(
           controller: widget.controller,
           patientHomeBuilder: widget.patientHomeBuilder,
           onBack: () => setState(() => _pick = _LaunchPick.choose),
         );
       case _LaunchPick.admin:
-        return AdminDashboardScreen(onBack: () => setState(() => _pick = _LaunchPick.choose));
+        return AdminDashboardScreen(
+          onBack: () => setState(() => _pick = _LaunchPick.choose),
+        );
       case _LaunchPick.choose:
         return Scaffold(
           appBar: AppBar(title: const Text('SisFall Monitor')),
@@ -66,7 +100,9 @@ class _RoleLauncherState extends State<RoleLauncher> {
                   ),
                   const SizedBox(height: 12),
                   FilledButton(
-                    style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B9B8B)),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF1B9B8B),
+                    ),
                     onPressed: () => setState(() => _pick = _LaunchPick.elder),
                     child: const Text('I am the patient'),
                   ),
@@ -119,24 +155,22 @@ class _ElderGateScreenState extends State<ElderGateScreen> {
       _error = null;
     });
     try {
-      final map = await widget.controller.apiClient.elderLogin(
+      // controller.elderLogin clears any stale bearer token before the API
+      // call and applies the new session internally on success, preventing
+      // the "invalid credentials" bug when re-logging in after a restart.
+      final error = await widget.controller.elderLogin(
         username: _userCtrl.text.trim(),
         password: _passCtrl.text,
       );
-      final token = map['access_token'] as String? ?? '';
-      final rawPid = map['patient_id'];
-      final pid = rawPid is String
-          ? rawPid.trim()
-          : rawPid is num
-              ? rawPid.toString()
-              : '';
-      final name = map['display_name'] as String? ?? '';
-      if (token.isEmpty || pid.isEmpty) {
-        throw Exception('Invalid elder login response (missing patient link).');
+      if (error != null) {
+        setState(() => _error = error);
+        return;
       }
-      await widget.controller.applyElderSession(accessToken: token, patientId: pid, displayName: name);
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
+      // Use push (not pushReplacement) so RoleLauncher stays in the route
+      // stack. On logout, popUntil(isFirst) exposes RoleLauncher whose
+      // _onControllerChange listener switches it to the choose screen.
+      Navigator.of(context).push(
         MaterialPageRoute<void>(
           builder: (_) => widget.patientHomeBuilder(widget.controller),
         ),
@@ -152,7 +186,10 @@ class _ElderGateScreenState extends State<ElderGateScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        leading: IconButton(icon: const Icon(Icons.arrow_back), onPressed: widget.onBack),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: widget.onBack,
+        ),
         title: const Text('Elder sign in'),
       ),
       body: ListView(
@@ -160,7 +197,9 @@ class _ElderGateScreenState extends State<ElderGateScreen> {
         children: [
           TextField(
             controller: _userCtrl,
-            decoration: const InputDecoration(labelText: 'Username (from caretaker)'),
+            decoration: const InputDecoration(
+              labelText: 'Username (from caretaker)',
+            ),
           ),
           const SizedBox(height: 12),
           TextField(
@@ -172,7 +211,10 @@ class _ElderGateScreenState extends State<ElderGateScreen> {
           if (_error != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
-              child: Text(_error!, style: const TextStyle(color: Color(0xFFB53B34))),
+              child: Text(
+                _error!,
+                style: const TextStyle(color: Color(0xFFB53B34)),
+              ),
             ),
           FilledButton(
             onPressed: _busy ? null : _submit,

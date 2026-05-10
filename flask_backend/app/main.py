@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from flask_backend.app.database import init_schema, seed_default_admin
+from flask_backend.app.database import use_mongo
 from flask_backend.app.elder_credential_allocator import ELDER_CREDENTIAL_RULES_VERSION
 from flask_backend.app.monitoring_routes import router as monitoring_router, set_inference_runtime
 from flask_backend.app.services.motion_xgb_service import InferenceArtifacts, load_artifacts
@@ -73,6 +74,7 @@ def health():
         "versions": _versions(),
         "product": "SisFall_dataset_monitoring",
         "credential_rules_version": ELDER_CREDENTIAL_RULES_VERSION,
+        "database_backend": "mongo" if use_mongo() else "sqlite",
     }
 
 

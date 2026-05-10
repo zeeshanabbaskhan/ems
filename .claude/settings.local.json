@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"c:\\\\ems\" -Force)",
+      "Bash(Select-Object Name, Mode)",
+      "Bash(Format-Table -AutoSize)",
+      "PowerShell(ls c:\\\\ems\\\\app_new -ErrorAction SilentlyContinue; if \\(-not \\(Test-Path \"c:\\\\ems\\\\app_new\"\\)\\) { \"app_new does not exist\" })",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\ems\\\\app_new\\\\lib\" -Recurse -File | ForEach-Object { $_.FullName })"
+    ]
+  }
+}

@@ -427,6 +427,14 @@ class AdminPatientCreateBody(BaseModel):
     caregiver_id: str | None = None
 
 
+class PatientSignupBody(BaseModel):
+    full_name: str
+    username: str
+    password: str
+    age: int | None = None
+    email: str | None = None
+
+
 def _delete_patient_cascade(c: Any, patient_id: str) -> bool:
     """Remove patient row and dependents; delete linked elder login if present. Returns False if patient missing."""
     c.execute("SELECT elder_user_id FROM patients WHERE id = ?", (patient_id,))
@@ -643,6 +651,47 @@ def admin_login(body: AdminLoginBody):
         return {"access_token": token, "token_type": "bearer", "role": "admin", "email": em}
 
 
+@router.post("/api/v1/auth/patient/signup")
+def patient_signup(body: PatientSignupBody):
+    """Independent patient self-registration. No caregiver required."""
+    init_schema()
+    un = body.username.strip()
+    if not un:
+        raise HTTPException(status_code=422, detail="Username is required.")
+    if len(body.password) < 6:
+        raise HTTPException(status_code=422, detail="Password must be at least 6 characters.")
+    pid = uuid.uuid4().hex
+    eid = uuid.uuid4().hex
+    email = (body.email or "").strip() or f"{un}@patients.local"
+    with get_connection() as conn:
+        c = conn.cursor()
+        c.execute("SELECT id FROM users WHERE username = ?", (un,))
+        if c.fetchone():
+            raise HTTPException(status_code=409, detail="Username already taken.")
+        c.execute("SELECT id FROM users WHERE email = ?", (email,))
+        if c.fetchone():
+            raise HTTPException(status_code=409, detail="Email already registered.")
+        c.execute(
+            """INSERT INTO users (id, email, username, password_hash, role, full_name, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (eid, email, un, hash_password(body.password), "elder", body.full_name.strip(), iso_now()),
+        )
+        c.execute(
+            """INSERT INTO patients (id, full_name, age, caregiver_id, elder_user_id)
+               VALUES (?,?,?,NULL,?)""",
+            (pid, body.full_name.strip(), body.age, eid),
+        )
+    token = create_token(user_id=eid, role="elder", email=email)
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "role": "elder",
+        "user_id": eid,
+        "patient_id": pid,
+        "display_name": body.full_name.strip(),
+    }
+
+
 @router.post("/api/v1/auth/elder/login")
 def elder_login(body: ElderLoginBody):
     init_schema()
@@ -659,10 +708,7 @@ def elder_login(body: ElderLoginBody):
         if not prow:
             raise HTTPException(
                 status_code=409,
-                detail=(
-                    "This elder account is not linked to a patient record. "
-                    "Ask your caregiver to complete enrollment or contact support."
-                ),
+                detail="No patient record linked to this account. Please sign up again.",
             )
         patient_id = str(prow["id"])
         token = create_token(user_id=row["id"], role="elder", email=row["email"] or un)

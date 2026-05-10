@@ -46,7 +46,10 @@ class MonitoringController extends ChangeNotifier {
   static const String elderDeviceLabel = 'Patient phone';
   static const double defaultSampleRateHz = 50.0;
   static const int offlineWindowSizeSamples = 128;
-  static const int offlineWindowStepSamples = 64;
+  /// Phase 4: 25% window overlap (was 64 / 50%). Reduces inference frequency
+  /// from every 1.28 s to every 1.92 s, giving the model cleaner windows with
+  /// less transition-boundary contamination.
+  static const int offlineWindowStepSamples = 96;
   static const Duration _caregiverRefreshInterval = Duration(seconds: 2);
 
   static const String _backendUrlKey = 'backend_url';
@@ -85,6 +88,7 @@ class MonitoringController extends ChangeNotifier {
   bool _isBusy = false;
   bool _backendReachable = false;
   bool _isStreaming = false;
+  bool _isLoggedOut = false;
 
   String _backendUrl = defaultBackendUrl;
   String _patientName = '';
@@ -148,10 +152,30 @@ class MonitoringController extends ChangeNotifier {
   List<CaregiverAssignedPatientModel> _assignedPatients =
       <CaregiverAssignedPatientModel>[];
 
+  // ── Phase 2: activity-label majority-vote smoothing buffer ─────────────
+  // Collects the last N raw activity labels from the inference endpoint.
+  // The displayed label only flips when ≥ threshold of the last N agree,
+  // preventing a single noisy window from changing what the user sees.
+  static const int _activityVoteWindowSize = 5;
+  static const int _activityVoteThreshold = 3; // 3-of-5
+  final List<String> _activityLabelVotes = <String>[];
+  String? _smoothedActivityLabel;
+
   bool get initialized => _initialized;
   bool get isBusy => _isBusy;
   bool get backendReachable => _backendReachable;
   bool get isStreaming => _isStreaming;
+
+  /// Returns true (once) when `caregiverLogout` or `elderSignOut` just fired.
+  /// Consumes the flag — subsequent reads return false until the next logout.
+  bool consumeLoggedOut() {
+    if (_isLoggedOut) {
+      _isLoggedOut = false;
+      return true;
+    }
+    return false;
+  }
+
   bool get hasSetup {
     if (_elderAccessToken != null && _elderAccessToken!.trim().isNotEmpty) {
       return _backendUrl.trim().isNotEmpty &&
@@ -197,6 +221,13 @@ class MonitoringController extends ChangeNotifier {
   String? get displayPredictedActivity =>
       _lastDetection?.predictedActivityClass ??
       _liveStatus?.predictedActivityClass;
+
+  /// Phase 2: majority-vote smoothed activity label for the patient home screen.
+  /// Falls back to the raw inference label when the buffer hasn't converged yet.
+  String? get smoothedActivityLabel =>
+      _smoothedActivityLabel ??
+      _lastMotionInference?.activityLabel ??
+      _lastDetection?.predictedActivityClass;
   AlertRecordModel? get activeAlert => _activeAlert;
   TelemetrySnapshotModel? get latestTelemetry => _latestTelemetry;
 
@@ -313,23 +344,25 @@ class MonitoringController extends ChangeNotifier {
     _caregiverEmail = _preferences?.getString(_caregiverEmailKey) ?? '';
     _homeLatitude = _preferences?.getDouble(_homeLatitudeKey);
     _homeLongitude = _preferences?.getDouble(_homeLongitudeKey);
-    // Caregiver must always re-authenticate from role launcher.
-    // Do not auto-restore caregiver token from local storage.
-    _caregiverToken = null;
+    // Restore caregiver session from local storage so users stay logged in
+    // between app restarts and only need to sign in once.
+    _caregiverToken = _preferences?.getString(_caregiverTokenKey);
     _caregiverName = _preferences?.getString(_caregiverNameKey) ?? '';
     _caregiverAuthEmail = _preferences?.getString(_caregiverEmailAuthKey) ?? '';
     _elderAccessToken = _preferences?.getString(_elderAccessTokenKey);
     _sessionId = null;
 
     _apiClient.updateBaseUrl(_backendUrl);
-    if (_elderAccessToken != null && _elderAccessToken!.isNotEmpty) {
+    // Restore the appropriate bearer token depending on which session is active.
+    if (_caregiverToken != null && _caregiverToken!.isNotEmpty) {
+      _apiClient.setBearerToken(_caregiverToken);
+      // Suppress alarm for alerts that were already open before this launch.
+      _suppressAlarmBootstrap = true;
+    } else if (_elderAccessToken != null && _elderAccessToken!.isNotEmpty) {
       _apiClient.setBearerToken(_elderAccessToken);
     } else {
       _apiClient.setBearerToken(null);
     }
-
-    // Ensure legacy saved caregiver sessions do not silently auto-login next launch.
-    await _preferences?.remove(_caregiverTokenKey);
 
     _statusMessage = hasSetup
         ? 'Saved setup loaded. Check the backend and start monitoring.'
@@ -352,6 +385,10 @@ class MonitoringController extends ChangeNotifier {
     _lastError = null;
     notifyListeners();
     try {
+      // Clear any stale saved token before the auth request so it isn't
+      // forwarded as an Authorization header, which makes the backend
+      // reject the login/signup with an authentication error.
+      _apiClient.setBearerToken(null);
       final auth = await _apiClient.caregiverSignup(
         fullName: fullName.trim(),
         email: email.trim(),
@@ -386,6 +423,10 @@ class MonitoringController extends ChangeNotifier {
     _lastError = null;
     notifyListeners();
     try {
+      // Clear any stale saved token before the auth request so it isn't
+      // forwarded as an Authorization header, which makes the backend
+      // reject the login with an authentication error.
+      _apiClient.setBearerToken(null);
       final auth = await _apiClient.caregiverLogin(
         email: email.trim(),
         password: password,
@@ -408,6 +449,46 @@ class MonitoringController extends ChangeNotifier {
     } finally {
       _isBusy = false;
       notifyListeners();
+    }
+  }
+
+  /// Logs an elder in with the username/password from caregiver enrollment.
+  /// Returns an error string on failure, or null on success.
+  Future<String?> elderLogin({
+    required String username,
+    required String password,
+  }) async {
+    try {
+      // Clear any stale saved token before the auth request so it isn't
+      // forwarded as an Authorization header, causing the backend to
+      // reject the login with an authentication error.
+      _apiClient.setBearerToken(null);
+      final map = await _apiClient.elderLogin(
+        username: username.trim(),
+        password: password,
+      );
+      final token = map['access_token'] as String? ?? '';
+      final rawPid = map['patient_id'];
+      final pid = rawPid is String
+          ? rawPid.trim()
+          : rawPid is num
+              ? rawPid.toString()
+              : '';
+      final name = map['display_name'] as String? ?? '';
+      if (token.isEmpty || pid.isEmpty) {
+        return 'Invalid login response (missing patient link).';
+      }
+      await applyElderSession(
+        accessToken: token,
+        patientId: pid,
+        displayName: name,
+      );
+      return null; // success
+    } catch (e) {
+      // Restore no-token state if login fails — avoids leaving the client
+      // in a half-authenticated state.
+      _apiClient.setBearerToken(null);
+      return _formatError(e);
     }
   }
 
@@ -486,48 +567,78 @@ class MonitoringController extends ChangeNotifier {
   }
 
   Future<void> caregiverLogout() async {
+    // 1. Tear down active connections and streams.
     _disconnectCaregiverAlertSocket();
+    _stopAlarmIfPlaying();
+    if (_isStreaming) {
+      // Best-effort stop — don't block logout if it fails.
+      try {
+        await _sensorService.stop();
+      } catch (_) {}
+      _isStreaming = false;
+    } else {
+      try {
+        await _sensorService.stop();
+      } catch (_) {}
+    }
+    await _locationSubscription?.cancel();
+    _locationSubscription = null;
+    try {
+      await WakelockPlus.disable();
+    } catch (_) {}
+
+    // 2. Clear ALL in-memory auth and session state.
     _caregiverToken = null;
     _caregiverName = '';
     _caregiverAuthEmail = '';
-    _stopAlarmIfPlaying();
-    _alarmLatchedActive = false;
-    _alarmSilencedByUser = false;
-    _silencedSevereAlertIds = <String>{};
-    _alarmSilencedAt = null;
-    _suppressAlarmBootstrap = false;
+    _elderAccessToken = null;
     _apiClient.setBearerToken(null);
-    _clearCaregiverDashboardCache();
+
+    // 3. Clear ALL in-memory data state.
     _patientId = null;
     _deviceId = null;
     _sessionId = null;
     _patientName = '';
     _patientAge = null;
+    _deviceLabel = defaultDeviceLabel;
     _medicalNotes = '';
     _emergencyContact = '';
     _photoPath = null;
     _homeLatitude = null;
     _homeLongitude = null;
-    _liveSensorSnapshot.clear();
-    _latestTelemetry = null;
-    _lastDetection = null;
+    _lastError = null;
     _lastMotionInference = null;
-    _statusMessage = 'Signed out. Please sign in again.';
+    _lastDetection = null;
+    _liveStatus = null;
+    _latestTelemetry = null;
+    _activeAlert = null;
+    _liveSensorSnapshot.clear();
+    _credentialHistory.clear();
+    _clearCaregiverDashboardCache();
+    _locationTrackingEnabled = false;
+    _currentPosition = null;
+    _locationError = null;
+    _lastLocationUploadAt = null;
+    _activityLabelVotes.clear();
+    _smoothedActivityLabel = null;
+
+    // 4. Reset alarm / notification state.
+    _alarmLatchedActive = false;
+    _alarmSilencedByUser = false;
+    _silencedSevereAlertIds = <String>{};
+    _latchedFallPatientIds = <String>{};
+    _alarmSilencedAt = null;
+    _suppressAlarmBootstrap = false;
+
+    // 5. Wipe ALL SharedPreferences — every key, including credential history.
     final preferences = _preferences ?? await SharedPreferences.getInstance();
     _preferences = preferences;
-    await preferences.remove(_caregiverTokenKey);
-    await preferences.remove(_caregiverNameKey);
-    await preferences.remove(_caregiverEmailAuthKey);
-    await preferences.remove(_patientIdKey);
-    await preferences.remove(_deviceIdKey);
-    await preferences.remove(_patientNameKey);
-    await preferences.remove(_patientAgeKey);
-    await preferences.remove(_medicalNotesKey);
-    await preferences.remove(_emergencyContactKey);
-    await preferences.remove(_photoPathKey);
-    await preferences.remove(_homeLatitudeKey);
-    await preferences.remove(_homeLongitudeKey);
-    _syncAlarmWithAlerts();
+    await preferences.clear();
+
+    _statusMessage = 'Signed out.';
+
+    // 6. Signal listeners so RoleLauncher navigates back to the role picker.
+    _isLoggedOut = true;
     notifyListeners();
   }
 
@@ -1044,6 +1155,8 @@ class MonitoringController extends ChangeNotifier {
       _lastMotionInference = null;
       _activeAlert = null;
       _latestTelemetry = null;
+      _activityLabelVotes.clear();
+      _smoothedActivityLabel = null;
       _liveStatus = LiveStatusModel(
         patientId: _patientId!,
         patientName: _patientName,
@@ -1364,6 +1477,41 @@ class MonitoringController extends ChangeNotifier {
         _lastMotionInference = motion;
         _statusMessage =
             '${response.detection.message} · ${motion.summaryLine}';
+
+        // ── Phase 3: stillness guard ──────────────────────────────────────
+        // If more than 65 % of the window was classified as still by the
+        // server, the raw label is unreliable (position adjustment, phone
+        // shift). Don't add it to the vote buffer — keep the current
+        // smoothed label instead of flip to "Walking" / "Running".
+        final stillness = response.detection.stillnessRatio;
+        final rawLabel = motion.activityLabel;
+
+        if (rawLabel != null && rawLabel.isNotEmpty && stillness <= 0.65) {
+          // ── Phase 2: majority-vote smoothing ─────────────────────────────
+          _activityLabelVotes.add(rawLabel);
+          if (_activityLabelVotes.length > _activityVoteWindowSize) {
+            _activityLabelVotes.removeAt(0);
+          }
+
+          // Count votes and pick a winner only when it meets the threshold.
+          final counts = <String, int>{};
+          for (final label in _activityLabelVotes) {
+            counts[label] = (counts[label] ?? 0) + 1;
+          }
+          // Find the label with the most votes that meets the threshold.
+          String? winner;
+          int winnerCount = 0;
+          for (final entry in counts.entries) {
+            if (entry.value >= _activityVoteThreshold &&
+                entry.value > winnerCount) {
+              winner = entry.key;
+              winnerCount = entry.value;
+            }
+          }
+          if (winner != null) {
+            _smoothedActivityLabel = winner;
+          }
+        }
       } catch (_) {
         // Optional stack: `/api/v1/inference/motion` returns 503 when models are missing.
       }
@@ -1530,33 +1678,75 @@ class MonitoringController extends ChangeNotifier {
     await preferences.remove(_elderAccessTokenKey);
   }
 
-  /// Patient mode: stop streaming, clear elder JWT and local patient/device ids, then return to role picker via [runApp] from UI.
+  /// Patient mode: stop streaming, wipe ALL local state and storage, return to role picker.
   Future<void> elderSignOut() async {
     await _ensureInitialized();
+
+    // 1. Stop any active sensor streaming / session.
     if (_isStreaming) {
-      await stopMonitoring();
+      try {
+        await stopMonitoring();
+      } catch (_) {
+        _isStreaming = false;
+        _sessionId = null;
+      }
     } else {
-      await _sensorService.stop();
-      await WakelockPlus.disable();
+      try {
+        await _sensorService.stop();
+      } catch (_) {}
     }
-    _locationSubscription?.cancel();
+    try {
+      await WakelockPlus.disable();
+    } catch (_) {}
+
+    // 2. Stop location tracking.
+    await _locationSubscription?.cancel();
     _locationSubscription = null;
     _locationTrackingEnabled = false;
-    await _clearElderAuth();
+    _currentPosition = null;
+    _locationError = null;
+    _lastLocationUploadAt = null;
+
+    // 3. Clear ALL in-memory auth and session state.
+    _elderAccessToken = null;
+    _caregiverToken = null;
+    _caregiverName = '';
+    _caregiverAuthEmail = '';
     _apiClient.setBearerToken(null);
+
+    // 4. Clear ALL in-memory patient/device data.
     _patientId = null;
     _deviceId = null;
     _sessionId = null;
     _patientName = '';
     _patientAge = null;
+    _deviceLabel = defaultDeviceLabel;
+    _medicalNotes = '';
+    _emergencyContact = '';
+    _photoPath = null;
+    _homeLatitude = null;
+    _homeLongitude = null;
+    _lastError = null;
     _lastMotionInference = null;
     _lastDetection = null;
     _liveStatus = null;
     _latestTelemetry = null;
+    _activeAlert = null;
     _liveSensorSnapshot.clear();
-    _lastError = null;
-    await _persistIdentifiers();
-    await _persistSetup();
+    _credentialHistory.clear();
+    _clearCaregiverDashboardCache();
+    _activityLabelVotes.clear();
+    _smoothedActivityLabel = null;
+
+    // 5. Wipe ALL SharedPreferences — every key.
+    final preferences = _preferences ?? await SharedPreferences.getInstance();
+    _preferences = preferences;
+    await preferences.clear();
+
+    _statusMessage = 'Signed out.';
+
+    // 6. Signal listeners so RoleLauncher navigates back to the role picker.
+    _isLoggedOut = true;
     notifyListeners();
   }
 
