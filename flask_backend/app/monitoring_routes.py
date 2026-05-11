@@ -197,7 +197,7 @@ def _heuristic_activity_label(samples_dict: list[dict[str, Any]]) -> str:
 
     # Heuristic buckets tuned for phone IMU magnitude around gravity (m/s^2).
     if peak_mag > 22.0 or std_mag > 3.5 or peak_gyro > 4.0:
-        return "running"
+        return "jogging"
     if std_mag < 0.30 and 8.5 <= mean_mag <= 10.8 and peak_gyro < 0.8:
         return "standing"
     if std_mag < 0.55 and peak_gyro < 1.2:

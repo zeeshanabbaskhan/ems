@@ -107,12 +107,9 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
     return ListenableBuilder(
       listenable: widget.controller,
       builder: (context, _) {
-        final m = widget.controller.lastMotionInference;
-        final falling = m != null && m.isFall;
-        if (falling) {
-          final motion = m;
-          final key =
-              '${motion.fallTypeCode}_${motion.fallProbability.toStringAsFixed(2)}';
+        final alert = widget.controller.activeAlert;
+        if (alert != null) {
+          final key = alert.id;
           if (key != _lastShownKey && !_fallDialogOpen) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (!mounted || _fallDialogOpen) {
@@ -122,7 +119,7 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
                 _lastShownKey = key;
                 _fallDialogOpen = true;
               });
-              _showFallDialog(context, widget.controller, motion, key);
+              _showFallDialog(context, widget.controller, alert, key);
             });
           }
         }
@@ -179,7 +176,7 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
   void _showFallDialog(
     BuildContext context,
     MonitoringController controller,
-    MotionInferenceResponseModel m,
+    AlertRecordModel alert,
     String key,
   ) {
     String selectedResponse = 'need_help';
@@ -196,7 +193,7 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(m.summaryLine),
+                    Text(alert.message),
                     const SizedBox(height: 10),
                     const Text(
                       'Your caregiver has already been alerted automatically.',
@@ -239,7 +236,7 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
                   onPressed: () => _submit(
                     ctx,
                     controller,
-                    m,
+                    alert,
                     selectedResponse,
                   ),
                   child: const Text('Submit'),
@@ -259,7 +256,7 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
   Future<void> _submit(
     BuildContext ctx,
     MonitoringController controller,
-    MotionInferenceResponseModel m,
+    AlertRecordModel alert,
     String response,
   ) async {
     Navigator.of(ctx).pop();
@@ -269,8 +266,8 @@ class _FallAwarePatientHomeState extends State<FallAwarePatientHome> {
         'patient_id': pid,
         'response': response,
         'fall_detected': true,
-        'predicted_fall_type_code': m.fallTypeCode,
-        'fall_probability': m.fallProbability,
+        'predicted_fall_type_code': alert.severity,
+        'fall_probability': alert.score,
       });
     } catch (_) {}
   }

@@ -104,7 +104,7 @@ String? _simplifyActivityLabel(String? label) {
   final lower = t.toLowerCase();
 
   // Keep core ADL classes stable and avoid over-merging transitions.
-  if (lower.contains('jog') || lower.contains('run')) return 'Running';
+  if (lower.contains('jog') || lower.contains('run')) return 'Jogging';
   if (lower.contains('walking')) return 'Walking';
   if (lower.contains('sitting')) return 'Sitting';
   if (lower.contains('standing')) return 'Standing';

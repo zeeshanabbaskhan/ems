@@ -156,8 +156,8 @@ class MonitoringController extends ChangeNotifier {
   // Collects the last N raw activity labels from the inference endpoint.
   // The displayed label only flips when ≥ threshold of the last N agree,
   // preventing a single noisy window from changing what the user sees.
-  static const int _activityVoteWindowSize = 7;
-  static const int _activityVoteThreshold = 5; // 5-of-7
+  static const int _activityVoteWindowSize = 11;
+  static const int _activityVoteThreshold = 6; // 6-of-11
   final List<String> _activityLabelVotes = <String>[];
   String? _smoothedActivityLabel;
 
@@ -225,14 +225,10 @@ class MonitoringController extends ChangeNotifier {
   /// Phase 2: majority-vote smoothed activity label for the patient home screen.
   /// Falls back to the raw inference label when the buffer hasn't converged yet.
   String? get smoothedActivityLabel {
-    // If a fall is detected, bypass the smoothing buffer immediately so the UI
-    // shows the actual fall type (e.g., "Fall (Forward)") instead of the old label.
-    if (_lastMotionInference?.isFall == true || _lastDetection?.severity == 'fall_detected') {
+    if (_activeAlert != null || _lastDetection?.severity == 'fall_detected') {
       return _lastDetection?.predictedActivityClass ?? 'Fall Detected';
     }
-    return _smoothedActivityLabel ??
-        _lastMotionInference?.activityLabel ??
-        _lastDetection?.predictedActivityClass;
+    return _smoothedActivityLabel ?? _lastDetection?.predictedActivityClass;
   }
   AlertRecordModel? get activeAlert => _activeAlert;
   TelemetrySnapshotModel? get latestTelemetry => _latestTelemetry;
@@ -1474,56 +1470,40 @@ class MonitoringController extends ChangeNotifier {
       _liveStatus = response.liveStatus;
       _latestTelemetry = response.telemetry;
 
-      try {
-        final motion = await MotionInferenceHelper.inferFromSamples(
-          _apiClient,
-          samples,
-          predictFallType: true,
-        );
-        _lastMotionInference = motion;
-        _statusMessage =
-            '${response.detection.message} · ${motion.summaryLine}';
+      // Activity label comes directly from the ingest response, which is already
+      // server VoteBuffer-smoothed and through _humanize/_simplify. No second
+      // inference call needed — that caused split-brain between the alert decision
+      // (ingest) and the popup trigger (second call).
+      final rawLabel = response.detection.predictedActivityClass;
+      final stillness = response.detection.stillnessRatio;
+      final isFallBranch = response.detection.severity == 'fall_detected' ||
+          (rawLabel != null && rawLabel.toLowerCase().contains('fall'));
 
-        // ── Phase 3: stillness guard ──────────────────────────────────────
-        // If more than 55 % of the window was classified as still by the
-        // server, the raw label is unreliable (position adjustment, phone
-        // shift). Don't add it to the vote buffer — keep the current
-        // smoothed label instead of flip to "Walking" / "Running".
-        final stillness = response.detection.stillnessRatio;
-        final rawLabel = motion.activityLabel;
-
-        if (rawLabel != null && rawLabel.isNotEmpty && stillness <= 0.55) {
-          // ── Phase 2: majority-vote smoothing ─────────────────────────────
-          _activityLabelVotes.add(rawLabel);
-          if (_activityLabelVotes.length > _activityVoteWindowSize) {
-            _activityLabelVotes.removeAt(0);
-          }
-
-          // Count votes and pick a winner only when it meets the threshold.
-          final counts = <String, int>{};
-          for (final label in _activityLabelVotes) {
-            counts[label] = (counts[label] ?? 0) + 1;
-          }
-          // Find the label with the most votes that meets the threshold.
-          String? winner;
-          int winnerCount = 0;
-          for (final entry in counts.entries) {
-            if (entry.value >= _activityVoteThreshold &&
-                entry.value > winnerCount) {
-              winner = entry.key;
-              winnerCount = entry.value;
-            }
-          }
-          if (winner != null) {
-            _smoothedActivityLabel = winner;
+      if (rawLabel != null && rawLabel.isNotEmpty && !isFallBranch && stillness <= 0.55) {
+        _activityLabelVotes.add(rawLabel);
+        if (_activityLabelVotes.length > _activityVoteWindowSize) {
+          _activityLabelVotes.removeAt(0);
+        }
+        final counts = <String, int>{};
+        for (final label in _activityLabelVotes) {
+          counts[label] = (counts[label] ?? 0) + 1;
+        }
+        String? winner;
+        int winnerCount = 0;
+        for (final entry in counts.entries) {
+          if (entry.value >= _activityVoteThreshold && entry.value > winnerCount) {
+            winner = entry.key;
+            winnerCount = entry.value;
           }
         }
-      } catch (_) {
-        // Optional stack: `/api/v1/inference/motion` returns 503 when models are missing.
+        if (winner != null) {
+          _smoothedActivityLabel = winner;
+        }
       }
 
       if (response.activeAlert != null) {
         _activeAlert = response.activeAlert;
+        _activityLabelVotes.clear();
       } else if (response.liveStatus.activeAlertIds.isEmpty) {
         _activeAlert = null;
       }
