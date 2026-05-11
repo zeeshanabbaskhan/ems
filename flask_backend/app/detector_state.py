@@ -19,28 +19,50 @@ MEDIUM = {
 FALL_MIN_PEAK_ACC_G = 1.70
 FALL_MIN_PEAK_GYRO_DPS = 180.0
 
-# When ML outputs high fall prob but IMU looks like quiet stance (domain shift / pocket noise),
-# dampen probability used for severity + risk score — does not apply if gyro or acceleration
-# clearly shows locomotion or impact-sized peaks.
+# Stationary guard: quiet stance / pocket noise (phone barely moving).
 _STATIONARY_GYRO_PEAK_DPS = 95.0
 _STATIONARY_PEAK_ACC_G = 2.05
 _STATIONARY_STILLNESS_MIN = 0.62
 
+# Locomotion guard: sustained rhythmic motion (walking/running).
+# Real fall impacts have: extreme single spike (peak/mean > ratio) or very high gyro.
+_LOCOMOTION_MIN_MEAN_ACC_G = 1.10   # sustained above-gravity = actively moving
+_LOCOMOTION_MAX_PEAK_ACC_G = 4.5    # hard impacts usually exceed this
+_LOCOMOTION_MAX_GYRO_DPS = 260.0    # hard fall tumble usually exceeds this
+_LOCOMOTION_MAX_IMPULSE_RATIO = 3.5  # peak/mean; falls tend > 4x, running ≈ 1.5–3x
+
 
 def _effective_fall_probability(p: float, sig: dict[str, float]) -> tuple[float, bool]:
-    """Blend down inflated ML fall prob when the batch looks physically stationary."""
+    """Blend down inflated ML fall prob when the batch looks stationary or like locomotion."""
     if p <= 0.35:
         return p, False
+
+    # --- stationary guard (phone barely moving) ---
     looks_stationary = (
         sig["peak_gyro_dps"] < _STATIONARY_GYRO_PEAK_DPS
         and sig["peak_acc_g"] < _STATIONARY_PEAK_ACC_G
         and sig["stillness"] >= _STATIONARY_STILLNESS_MIN
     )
-    if not looks_stationary:
-        return p, False
-    # Soft cap: standing / holding phone still should not sit at ~70% risk from ML alone.
-    dampened = min(p, 0.14 + p * 0.22)
-    return dampened, True
+    if looks_stationary:
+        dampened = min(p, 0.14 + p * 0.22)
+        return dampened, True
+
+    # --- locomotion guard (sustained walking / running rhythm) ---
+    if p > 0.50:
+        mean_acc = sig.get("mean_acc_g", 0.0)
+        impulse_ratio = sig["peak_acc_g"] / max(mean_acc, 0.5)
+        looks_like_locomotion = (
+            mean_acc >= _LOCOMOTION_MIN_MEAN_ACC_G          # person is moving
+            and sig["peak_acc_g"] < _LOCOMOTION_MAX_PEAK_ACC_G  # no extreme impact
+            and sig["peak_gyro_dps"] < _LOCOMOTION_MAX_GYRO_DPS  # no violent tumble
+            and impulse_ratio < _LOCOMOTION_MAX_IMPULSE_RATIO    # rhythmic, not spike
+        )
+        if looks_like_locomotion:
+            # Dampen but keep elevated risk visible — caps jogging at ~0.60 fall prob.
+            dampened = min(p, 0.40 + p * 0.22)
+            return dampened, True
+
+    return p, False
 
 
 def _severity_from_fall_prob(p: float, thr: float) -> str:
@@ -78,12 +100,14 @@ def simple_signal_metrics(samples: list[dict[str, Any]]) -> dict[str, float]:
             jerks.append(abs(mag - prev_mag))
         prev_mag = mag
     peak_acc_g = max(peaks_acc) if peaks_acc else 0.0
+    mean_acc_g = float(np.mean(peaks_acc)) if peaks_acc else 0.0
     peak_gyro_dps = max(peaks_gyro) if peaks_gyro else 0.0
     peak_jerk = max(jerks) if jerks else 0.0
     stillness = float(np.std(np.asarray(mags))) if mags else 0.0
     stillness_ratio = max(0.0, min(1.0, 1.0 - stillness / max(np.mean(mags), 1e-6)))
     return {
         "peak_acc_g": peak_acc_g,
+        "mean_acc_g": mean_acc_g,
         "peak_gyro_dps": peak_gyro_dps,
         "peak_jerk": peak_jerk,
         "stillness": stillness_ratio,
@@ -140,6 +164,7 @@ def build_detection_payload(
         "gait_stability_score": None,
         "movement_disorder_score": None,
         "peak_acc_g": float(sig["peak_acc_g"]),
+        "mean_acc_g": float(sig["mean_acc_g"]),
         "peak_gyro_dps": float(sig["peak_gyro_dps"]),
         "peak_jerk_g_per_s": float(sig["peak_jerk"]),
         "stillness_ratio": float(sig["stillness"]),

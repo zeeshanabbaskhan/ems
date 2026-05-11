@@ -272,7 +272,7 @@ class TestVoteBuffer:
         assert buf.confidence == pytest.approx(0.75)
 
     def test_vote_buffer_size_constant(self):
-        assert VOTE_BUFFER_SIZE == 7
+        assert VOTE_BUFFER_SIZE == 11
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -293,7 +293,7 @@ class TestModelLoading:
         import json
         with open(MANIFEST_PATH) as f:
             manifest = json.load(f)
-        assert manifest["fall_probability_threshold"] == pytest.approx(0.55)
+        assert manifest["fall_probability_threshold"] == pytest.approx(0.65)
 
     def test_model_files_exist(self):
         import json
@@ -327,7 +327,7 @@ class TestModelLoading:
     def test_artifacts_fall_threshold(self):
         from flask_backend.app.services.motion_xgb_service import load_artifacts
         art = load_artifacts(MANIFEST_PATH, MODEL_ROOT)
-        assert art.fall_threshold == pytest.approx(0.55)
+        assert art.fall_threshold == pytest.approx(0.65)
 
     def test_adl_scaler_dim(self):
         from flask_backend.app.services.motion_xgb_service import load_artifacts

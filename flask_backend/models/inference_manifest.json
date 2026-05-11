@@ -6,7 +6,7 @@
   "fall_type_selected_features": 150,
   "enhanced_pipeline": "flask_backend/app/motion_enhanced_features.py extract_enhanced_features — parity with v2 training extract_window_features",
   "fall_type_pipeline": "optional: scripts/baseline_falltype — omit fall_type in manifest to disable",
-  "fall_probability_threshold": 0.55,
+  "fall_probability_threshold": 0.65,
   "random_state_training": 42,
   "artifacts": {
     "fall_binary": {

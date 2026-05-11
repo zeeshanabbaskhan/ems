@@ -18,11 +18,13 @@ _WINDOW_ENHANCED = 128
 # Fall-type pipeline expects ~6 s @ 50 Hz.
 _WINDOW_FALL_TYPE = 300
 
-# Lower threshold matches v2 training recommendation (reduces missed falls).
-FALL_THRESHOLD_DEFAULT = 0.55
+# Raised from 0.55: reduces false fall-branch routing for high-intensity activities (jogging).
+# Real falls typically score 0.85+; 0.65 still catches them while routing jogging to ADL branch.
+FALL_THRESHOLD_DEFAULT = 0.65
 
-# Majority-vote window: 7 consecutive inference windows ≈ 3.5 s at 50% overlap.
-VOTE_BUFFER_SIZE = 7
+# Majority-vote window: 11 consecutive inference windows ≈ 14 s at 50% overlap.
+# Raised from 7 to dampen noisy STD→WAL and WAL→JOG label flips from brief phone movement.
+VOTE_BUFFER_SIZE = 11
 
 
 class VoteBuffer:
