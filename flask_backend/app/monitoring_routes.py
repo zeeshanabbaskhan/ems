@@ -142,6 +142,128 @@ def _preview_rows(rows: list[list[float]], limit: int = 2) -> str:
     return "[" + ", ".join(chunks) + (" ...]" if len(rows) > limit else "]")
 
 
+# ── Sensor diagnostic log ─────────────────────────────────────────────────────
+_SENSOR_DIAG_LOG = os.path.join(
+    os.environ.get("EMS_DIAG_DIR", os.path.join(os.path.dirname(__file__), "..", "logs")),
+    "sensor_diag.jsonl",
+)
+os.makedirs(os.path.dirname(_SENSOR_DIAG_LOG), exist_ok=True)
+
+_SEP = "=" * 70
+_DIAG_COUNTER = 0   # batch sequence number (module-level, not thread-safe but fine for diag)
+
+
+def _diag_sensor_batch(samples: list[dict[str, Any]], patient_id: str) -> None:
+    """
+    Print a clearly visible sensor diagnostic banner to the terminal and append
+    a JSON record to sensor_diag.jsonl for every ingest batch.
+
+    Checks:
+      • Accelerometer  — mean/min/max per axis + magnitude mean (m/s²)
+      • Gyroscope      — mean/min/max per axis + magnitude mean (rad/s)
+      • Orientation    — presence flag + mean azimuth/pitch/roll (degrees)
+    """
+    global _DIAG_COUNTER
+    _DIAG_COUNTER += 1
+    seq = _DIAG_COUNTER
+    ts = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    n = len(samples)
+    if n == 0:
+        return
+
+    acc_x  = [float(s.get("acc_x",  0.0)) for s in samples]
+    acc_y  = [float(s.get("acc_y",  0.0)) for s in samples]
+    acc_z  = [float(s.get("acc_z",  0.0)) for s in samples]
+    gyro_x = [float(s.get("gyro_x", 0.0)) for s in samples]
+    gyro_y = [float(s.get("gyro_y", 0.0)) for s in samples]
+    gyro_z = [float(s.get("gyro_z", 0.0)) for s in samples]
+
+    ori_samples  = [s for s in samples if s.get("azimuth") is not None]
+    ori_present  = len(ori_samples)
+    ori_coverage = ori_present / n * 100.0
+    az_vals  = [float(s["azimuth"]) for s in ori_samples] if ori_samples else []
+    pit_vals = [float(s.get("pitch", 0.0)) for s in ori_samples] if ori_samples else []
+    rol_vals = [float(s.get("roll",  0.0)) for s in ori_samples] if ori_samples else []
+
+    acc_mag  = [float(np.sqrt(x**2 + y**2 + z**2)) for x, y, z in zip(acc_x, acc_y, acc_z)]
+    gyro_mag = [float(np.sqrt(x**2 + y**2 + z**2)) for x, y, z in zip(gyro_x, gyro_y, gyro_z)]
+
+    def _s(vals: list[float]) -> str:
+        if not vals:
+            return "N/A"
+        return f"mean={np.mean(vals):+.3f}  min={min(vals):+.3f}  max={max(vals):+.3f}"
+
+    ori_status = (
+        f"PRESENT  ({ori_present}/{n} samples = {ori_coverage:.0f}%)"
+        if ori_present > 0
+        else "MISSING  *** no orientation data in this batch ***"
+    )
+
+    # ── terminal banner ────────────────────────────────────────────────────────
+    banner = (
+        f"\n{_SEP}\n"
+        f"  SENSOR DIAGNOSTIC  |  batch #{seq:04d}  |  {ts}  |  patient={patient_id}\n"
+        f"  samples={n}\n"
+        f"{_SEP}\n"
+        f"  ACCELEROMETER  (m/s²)\n"
+        f"    acc_x : {_s(acc_x)}\n"
+        f"    acc_y : {_s(acc_y)}\n"
+        f"    acc_z : {_s(acc_z)}\n"
+        f"    |mag| : {_s(acc_mag)}\n"
+        f"{'-' * 70}\n"
+        f"  GYROSCOPE  (rad/s)\n"
+        f"    gyr_x : {_s(gyro_x)}\n"
+        f"    gyr_y : {_s(gyro_y)}\n"
+        f"    gyr_z : {_s(gyro_z)}\n"
+        f"    |mag| : {_s(gyro_mag)}\n"
+        f"{'-' * 70}\n"
+        f"  ORIENTATION  (degrees)\n"
+        f"    status  : {ori_status}\n"
+    )
+    if ori_samples:
+        banner += (
+            f"    azimuth : {_s(az_vals)}\n"
+            f"    pitch   : {_s(pit_vals)}\n"
+            f"    roll    : {_s(rol_vals)}\n"
+        )
+    banner += _SEP
+
+    print(banner, flush=True)
+
+    # ── append JSON record to log file ─────────────────────────────────────────
+    record: dict[str, Any] = {
+        "seq": seq,
+        "ts": ts,
+        "patient_id": patient_id,
+        "n_samples": n,
+        "acc": {
+            "x": {"mean": round(float(np.mean(acc_x)), 4), "min": round(min(acc_x), 4), "max": round(max(acc_x), 4)},
+            "y": {"mean": round(float(np.mean(acc_y)), 4), "min": round(min(acc_y), 4), "max": round(max(acc_y), 4)},
+            "z": {"mean": round(float(np.mean(acc_z)), 4), "min": round(min(acc_z), 4), "max": round(max(acc_z), 4)},
+            "mag_mean": round(float(np.mean(acc_mag)), 4),
+        },
+        "gyro": {
+            "x": {"mean": round(float(np.mean(gyro_x)), 4), "min": round(min(gyro_x), 4), "max": round(max(gyro_x), 4)},
+            "y": {"mean": round(float(np.mean(gyro_y)), 4), "min": round(min(gyro_y), 4), "max": round(max(gyro_y), 4)},
+            "z": {"mean": round(float(np.mean(gyro_z)), 4), "min": round(min(gyro_z), 4), "max": round(max(gyro_z), 4)},
+            "mag_mean": round(float(np.mean(gyro_mag)), 4),
+        },
+        "orientation": {
+            "present": ori_present > 0,
+            "coverage_pct": round(ori_coverage, 1),
+            "n_with_ori": ori_present,
+            "azimuth_mean":  round(float(np.mean(az_vals)),  3) if az_vals  else None,
+            "pitch_mean":    round(float(np.mean(pit_vals)), 3) if pit_vals else None,
+            "roll_mean":     round(float(np.mean(rol_vals)), 3) if rol_vals else None,
+        },
+    }
+    try:
+        with open(_SENSOR_DIAG_LOG, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record) + "\n")
+    except OSError:
+        pass  # never crash ingest over a diag write failure
+
+
 def _is_alarm_eligible_alert(
     *,
     severity: str | None,
@@ -891,6 +1013,7 @@ def ingest_live(body: IngestLiveBody, background_tasks: BackgroundTasks):
         thr = float(art.fall_threshold) if art is not None else 0.8
 
     samples_dict = [s.model_dump(exclude_none=True) for s in body.samples]
+    _diag_sensor_batch(samples_dict, body.patient_id)
     feat_vec, acc300, gyro300, ori300 = samples_to_feature_vector(samples_dict)
     acc_w, gyro_w, ori_w = acc_gyro_ori_to_window_lists(acc300, gyro300, ori300)
     if DEBUG_SENSOR_LOGS:
