@@ -33,7 +33,7 @@ _STATIONARY_STILLNESS_MIN = 0.58  # slightly looser so micro-tremors are caught
 # brief spike (ratio > 4×), whereas jogging keeps ratio ≈ 1.5–2.5× even at high peaks.
 _LOCOMOTION_MIN_MEAN_ACC_G = 1.10   # sustained above-gravity = person is actively moving
 _LOCOMOTION_MAX_GYRO_DPS = 260.0    # hard fall tumble usually exceeds this
-_LOCOMOTION_MAX_IMPULSE_RATIO = 3.0  # tightened from 3.5; jogging ≈ 1.5–2.5, falls ≈ 4+
+_LOCOMOTION_MAX_IMPULSE_RATIO = 3.8  # raised: vigorous jogging footstrike can hit 3.0–3.5; falls stay ≈ 4+
 
 
 def _effective_fall_probability(p: float, sig: dict[str, float]) -> tuple[float, bool]:

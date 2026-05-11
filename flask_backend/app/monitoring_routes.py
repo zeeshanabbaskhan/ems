@@ -619,23 +619,8 @@ def tick_fall_escalations(conn) -> None:
                 "UPDATE fall_incidents SET stage = ? WHERE id = ?",
                 ("emergency", rid),
             )
-            aid = uuid.uuid4().hex
-            c.execute(
-                """INSERT INTO alerts (id, patient_id, device_id, session_id, severity, status, message, score, created_at, manually_triggered)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    aid,
-                    pid,
-                    None,
-                    row["session_id"],
-                    "fall_detected",
-                    "open",
-                    "EMERGENCY: elder did not confirm after alarm — escalate to caretaker.",
-                    1.0,
-                    iso_now(),
-                    0,
-                ),
-            )
+            # Do not generate a new fall_detected alert on timeout — the original
+            # fall alert already covers this incident.
 
 
 def _persist_feedback_db(body: FallFeedbackEvent) -> None:

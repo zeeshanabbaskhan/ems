@@ -900,7 +900,7 @@ class CaregiverDashboard extends StatelessWidget {
       final severity = isLatched ? 'fall_detected' : controller.displaySeverity;
       final risk = (controller.displayRiskScore * 100).round();
       final statusText = isLatched
-          ? '${live?.predictedActivityClass ?? 'Fall'} detected. Alarm state is latched until caregiver clears alarm.'
+          ? 'Fall detected. Alarm state is latched until caregiver clears alarm.'
           : (_cleanDetectionMessage(live?.lastMessage) ?? 'No live data yet.');
       final movement = controller.displayFallProbability * 100;
       children.addAll([
@@ -989,7 +989,7 @@ class CaregiverDashboard extends StatelessWidget {
         final severity = isLatched ? 'fall_detected' : (live?.severity ?? 'low');
         final risk = ((live?.score ?? 0) * 100).round();
         final statusText = isLatched
-            ? '${live?.predictedActivityClass ?? 'Fall'} detected. Alarm state is latched until caregiver clears alarm.'
+            ? 'Fall detected. Alarm state is latched until caregiver clears alarm.'
             :
             _cleanDetectionMessage(live?.lastMessage) ??
             'No live data yet. Patient can sign in with generated credentials.';
@@ -2416,14 +2416,10 @@ String? _cleanDetectionMessage(String? message) {
 String _liveSummaryLine(LiveStatusModel live) {
   final p = (live.fallProbability * 100).toStringAsFixed(1);
   if (live.severity == 'fall_detected') {
-    final act = (live.predictedActivityClass ?? '').trim();
-    if (act.isNotEmpty) {
-      return 'Fall detected ($p%): $act';
-    }
     return 'Fall detected ($p%)';
   }
   final act = (live.predictedActivityClass ?? '').trim();
-  final label = act.isEmpty ? 'ADL' : act;
+  final label = act.isEmpty ? 'Activity' : act;
   return 'No fall ($p%): $label';
 }
 
